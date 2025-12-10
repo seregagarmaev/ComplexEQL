@@ -5,129 +5,264 @@ import torch
 import torch.nn as nn
 
 
+def _safe_complex_log(z: torch.Tensor) -> torch.Tensor:
+    eps = 1e-6
+    max_r = 1e6
+
+    if torch.is_complex(z):
+        mag = z.abs()
+        mag_clamped = torch.clamp(mag, eps, max_r)
+        scale = mag_clamped / (mag + eps)
+        z_clamped = z * scale
+    else:
+        z_clamped = torch.clamp(z, eps, max_r)
+
+    out = torch.log(z_clamped)
+
+    finite_mask = torch.isfinite(out)
+    if not finite_mask.all():
+        out = out.clone()
+        out[~finite_mask] = 0.0
+    return out
+
+# ======================
+# UNARY OPERATIONS
+# ======================
+
 def identity_operation(x: torch.Tensor) -> torch.Tensor:
-    return x.unsqueeze(-1)  # (B,) -> (B,1)
+    return x.unsqueeze(-1)  # (B,) → (B,1)
 
 
 def const_operation(x: torch.Tensor) -> torch.Tensor:
-    return (x * 0 + 1).unsqueeze(-1)  # (B,) -> (B,1)
+    return (x * 0 + 1).unsqueeze(-1)
 
 
 def square_operation(x: torch.Tensor) -> torch.Tensor:
-    x = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
-    out = x * x
-    out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
-    return out.unsqueeze(-1)
+    return (x * x).unsqueeze(-1)
 
 
 def cube_operation(x: torch.Tensor) -> torch.Tensor:
-    x = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
-    out = x * x * x
-    out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
-    return out.unsqueeze(-1)
+    return (x * x * x).unsqueeze(-1)
 
 
 def sqrt_operation(x: torch.Tensor) -> torch.Tensor:
-    # true complex sqrt
-    x = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
-    out = torch.sqrt(x)
-    out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
-    return out.unsqueeze(-1)
+    # complex sqrt
+    return torch.sqrt(x).unsqueeze(-1)
 
 
-def log_operation(x: torch.Tensor) -> torch.Tensor:
-    # complex logarithm
-    x = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
-    out = torch.log(x)
-    out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+# def log_operation(x: torch.Tensor) -> torch.Tensor:
+#     # complex logarithm
+#     return torch.log(x).unsqueeze(-1)
+
+def log_operation(x: torch.Tensor, stair_step_size: float | None = None) -> torch.Tensor:
+    """
+    Complex log with optional stair gating.
+
+    - If stair_step_size is None: plain safe complex log.
+    - If stair_step_size is given: for |x| <= stair_step_size/2, output 0;
+      else apply safe complex log.
+    """
+    z = x
+
+    # no stair: just safe log
+    if stair_step_size is None:
+        out = _safe_complex_log(z)
+        return out.unsqueeze(-1)
+
+    # stair: gate small magnitudes
+    stair = torch.as_tensor(
+        stair_step_size,
+        device=z.device,
+        dtype=z.real.dtype if torch.is_complex(z) else z.dtype,
+    )
+
+    mag = z.abs() if torch.is_complex(z) else torch.abs(z)
+    mask = mag > (stair / 2.0)
+
+    out = torch.zeros_like(
+        z,
+        dtype=z.dtype,
+        device=z.device,
+    )
+
+    if mask.any():
+        out_sel = _safe_complex_log(z[mask])
+        out[mask] = out_sel
+
     return out.unsqueeze(-1)
 
 
 def exponent_operation(x: torch.Tensor) -> torch.Tensor:
-    x = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
-    out = torch.exp(x)
-    out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
-    return out.unsqueeze(-1)
+    return torch.exp(x).unsqueeze(-1)
 
 
 def sin_operation(x: torch.Tensor) -> torch.Tensor:
-    x = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
-    out = torch.sin(x)
-    out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
-    return out.unsqueeze(-1)
+    return torch.sin(x).unsqueeze(-1)
 
 
 def cos_operation(x: torch.Tensor) -> torch.Tensor:
-    x = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
-    out = torch.cos(x)
-    out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
-    return out.unsqueeze(-1)
+    return torch.cos(x).unsqueeze(-1)
 
+
+# ======================
+# BINARY OPERATIONS
+# ======================
 
 def multiplication_operation(x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
-    x1 = torch.nan_to_num(x1, nan=0.0, posinf=0.0, neginf=0.0)
-    x2 = torch.nan_to_num(x2, nan=0.0, posinf=0.0, neginf=0.0)
-    out = x1 * x2
-    out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+    return (x1 * x2).unsqueeze(-1)
+
+
+# def div_operation(x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
+#     # plain complex division
+#     return (x1 / x2).unsqueeze(-1)
+
+def div_operation(x1: torch.Tensor, x2: torch.Tensor, stair_step_size: float) -> torch.Tensor:
+    num, den = x1, x2
+
+    stair = torch.as_tensor(
+        stair_step_size,
+        device=den.device,
+        dtype=den.real.dtype if torch.is_complex(den) else den.dtype,
+    )
+
+    den_mag = den.abs() if torch.is_complex(den) else torch.abs(den)
+    mask = den_mag > (stair / 2.0)
+
+    out = torch.zeros_like(num)
+
+    if mask.any():
+        out[mask] = num[mask] / den[mask]
+
     return out.unsqueeze(-1)
 
 
-def div_operation(x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
-    # plain complex division
-    x1 = torch.nan_to_num(x1, nan=0.0, posinf=0.0, neginf=0.0)
-    x2 = torch.nan_to_num(x2, nan=0.0, posinf=0.0, neginf=0.0)
-    out = x1 / x2
-    out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
-    return out.unsqueeze(-1)
+# def power_operation(x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
+#     return (x1 ** x2).unsqueeze(-1)
 
-
-def power_operation(x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
+def power_operation(x1: torch.Tensor, x2: torch.Tensor, stair_step_size: float | None = None) -> torch.Tensor:
     """
-    x1^x2 as a binary operation on complex tensors.
+    Complex power with optional stair on the base magnitude (via log|base|).
+
+    - Always clamps exponent to avoid crazy growth.
+    - If stair_step_size is given, we only keep outputs where |log|base|| <= stair_step_size.
+      Outside that region, output 0.
+    - If result is still non-finite and base ~ 0, set to 0.
     """
-    x1 = torch.nan_to_num(x1, nan=0.0, posinf=0.0, neginf=0.0)
-    x2 = torch.nan_to_num(x2, nan=0.0, posinf=0.0, neginf=0.0)
-    out = x1 ** x2
-    out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+    base = x1
+    exp = x2
+
+    # clamp exponent to avoid insane magnitudes
+    if torch.is_complex(exp):
+        exp_real = torch.clamp(exp.real, -5.0, 5.0)
+        exp_imag = torch.clamp(exp.imag, -5.0, 5.0)
+        exp_safe = torch.complex(exp_real, exp_imag)
+    else:
+        exp_safe = torch.clamp(exp, -5.0, 5.0)
+
+    out = base ** exp_safe  # complex
+
+    # optional stair gating based on |log|base||
+    if stair_step_size is not None:
+        eps = 1e-8
+        stair = torch.as_tensor(
+            stair_step_size,
+            device=base.device,
+            dtype=base.real.dtype if torch.is_complex(base) else base.dtype,
+        )
+
+        base_mag = base.abs().clamp(min=eps)
+        log_base = torch.log(base_mag)  # real
+        mask = torch.abs(log_base) <= stair
+
+        out_masked = torch.zeros_like(out)
+        if mask.any():
+            out_masked[mask] = out[mask]
+        out = out_masked
+
+    # fix remaining non-finite values
+    finite_mask = torch.isfinite(out)
+    if not finite_mask.all():
+        out = out.clone()
+        eps = 1e-6
+        base_small = base.abs() < eps
+        zero_fix = (~finite_mask) & base_small
+        if zero_fix.any():
+            out[zero_fix] = 0.0
+        still_bad = ~torch.isfinite(out)
+        if still_bad.any():
+            out[still_bad] = 0.0
+
     return out.unsqueeze(-1)
 
+
+
+# class UnarySurrogate(nn.Module):
+#     """Wrap an exact unary operation (no learnable params)."""
+#     def __init__(self, operation, cfg, fname, ftype):
+#         super().__init__()
+#         self.operation = operation
+#         self.cfg = cfg
+#         self.fname = fname
+#         self.ftype = ftype
+
+#     def forward(self, x: torch.Tensor) -> torch.Tensor:
+#         # x: (B,)
+#         out = self.operation(x)
+#         return out  # (B,1)
 
 class UnarySurrogate(nn.Module):
-    """Wrap an exact unary operation (no learnable params)."""
-    def __init__(self, operation, cfg, fname, ftype):
+    """Wrap an exact unary operation (no learnable params here)."""
+    def __init__(self, operation, cfg, fname, ftype, stair_step_size: float | None = None):
         super().__init__()
         self.operation = operation
         self.cfg = cfg
         self.fname = fname
         self.ftype = ftype
+        self.stair_step_size = stair_step_size
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (B,)
-        out = self.operation(x)
+        if self.stair_step_size is not None:
+            out = self.operation(x, self.stair_step_size)
+        else:
+            out = self.operation(x)
         return out  # (B,1)
 
+# class BinarySurrogate(nn.Module):
+#     """Wrap an exact binary operation."""
+#     def __init__(self, operation, cfg, fname, ftype):
+#         super().__init__()
+#         self.operation = operation
+#         self.cfg = cfg
+#         self.fname = fname
+#         self.ftype = ftype
+
+#     def forward(self, X: torch.Tensor) -> torch.Tensor:
+#         # X: (B, 2)
+#         out = self.operation(X[:, 0], X[:, 1])
+#         return out  # (B,1)
 
 class BinarySurrogate(nn.Module):
     """Wrap an exact binary operation."""
-    def __init__(self, operation, cfg, fname, ftype):
+    def __init__(self, operation, cfg, fname, ftype, stair_step_size: float | None = None):
         super().__init__()
         self.operation = operation
         self.cfg = cfg
         self.fname = fname
         self.ftype = ftype
+        self.stair_step_size = stair_step_size
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         # X: (B, 2)
-        out = self.operation(X[:, 0], X[:, 1])
+        if self.stair_step_size is not None:
+            out = self.operation(X[:, 0], X[:, 1], self.stair_step_size)
+        else:
+            out = self.operation(X[:, 0], X[:, 1])
         return out  # (B,1)
-
 
 def load_models(cfg, layer_idx: int):
     """
     Build the list of exact symbolic operations for a given symbolic layer.
-
-    Supported 'model_type':
-      - 'exact'  : uses exact versions of operations (complex-capable)
     """
     unary_nos = []
     binary_nos = []
@@ -135,15 +270,10 @@ def load_models(cfg, layer_idx: int):
     params_list = cfg.no_params_list[layer_idx]
 
     for params in params_list:
-        model_type = params["model_type"]
         op = params["library_function"]
         optype = params["library_function_type"]
+        stair_step_size = params.get("stair_step_size", None)
 
-        if model_type != "exact":
-            raise ValueError(
-                f"ComplexEQL now only supports exact operations. "
-                f"Got model_type='{model_type}' for op '{op}'."
-            )
 
         if optype == "unary":
             if op == "id":
@@ -157,7 +287,8 @@ def load_models(cfg, layer_idx: int):
             elif op == "sqrt":
                 model = UnarySurrogate(sqrt_operation, cfg, op, optype)
             elif op == "log":
-                model = UnarySurrogate(log_operation, cfg, op, optype)
+                # model = UnarySurrogate(log_operation, cfg, op, optype)
+                model = UnarySurrogate(log_operation, cfg, op, optype, stair_step_size=stair_step_size)
             elif op == "exp":
                 model = UnarySurrogate(exponent_operation, cfg, op, optype)
             elif op == "sin":
@@ -172,9 +303,11 @@ def load_models(cfg, layer_idx: int):
             if op == "mul":
                 model = BinarySurrogate(multiplication_operation, cfg, op, optype)
             elif op == "div":
-                model = BinarySurrogate(div_operation, cfg, op, optype)
-            elif op in ("pow", "abs_pow"):  # treat old 'abs_pow' name as power now
-                model = BinarySurrogate(power_operation, cfg, op, optype)
+                # model = BinarySurrogate(div_operation, cfg, op, optype)
+                model = BinarySurrogate(div_operation, cfg, op, optype, stair_step_size=stair_step_size)
+            elif op in ("pow"):
+                # model = BinarySurrogate(power_operation, cfg, op, optype)
+                model = BinarySurrogate(power_operation, cfg, op, optype, stair_step_size=stair_step_size)
             else:
                 raise ValueError(f"Unknown exact binary operation '{op}'")
             binary_nos.append(model)

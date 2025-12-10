@@ -15,12 +15,11 @@ def _threshold_multiply(coef: sympy.Number, val: sympy.Expr, decimals: int) -> s
     Keeps expressions tidy during symbolic readout.
     """
     try:
-        if coef.round(decimals=decimals) == 0:
+        if coef.round(decimals) == 0.0:
             return sympy.Integer(0)
         return (coef * val).n(decimals)
     except Exception:
         return coef * val
-
 
 
 class SymbolicLayer(nn.Module):
@@ -78,6 +77,71 @@ class SymbolicLayer(nn.Module):
             for p in model.parameters():
                 p.requires_grad = False
 
+    # def get_symbolic_output(
+    #     self,
+    #     symbolic_inputs: List[sympy.Expr],
+    #     rounding_decimals: int = 2,
+    # ) -> List[sympy.Expr]:
+    #     """
+    #     Symbolic mirror of forward():
+    #       - mix inputs with (rounded) REAL PART of complex weights
+    #       - apply each operator symbolically via functions_dict
+    #     Returns list of sympy expressions, one per operator in this layer (unary first, then binary).
+    #     """
+    #     outs: List[sympy.Expr] = []
+
+    #     # ---------- UNARY OPS ----------
+    #     for op_idx in range(self.n_unary_nos):
+    #         op_name = self.function_names[op_idx]
+    #         mixed = sympy.Integer(0)
+
+    #         for j in range(len(symbolic_inputs)):
+    #             w = self.weights[j, op_idx].detach()
+    #             coef_real = float(w.real.cpu().item())
+    #             coef_sym = sympy.Float(coef_real)
+    #             mixed += _threshold_multiply(coef_sym, symbolic_inputs[j], rounding_decimals)
+
+    #         if op_name == "dydx":
+    #             op = self.functions_dict[op_name]
+    #             symbolic_out = op(mixed, self.functions_dict["x"])
+    #         else:
+    #             op = self.functions_dict[op_name]
+    #             symbolic_out = op(mixed)
+
+    #         if isinstance(symbolic_out, int) or getattr(symbolic_out, "is_infinite", False):
+    #             outs.append(sympy.Integer(0))
+    #         else:
+    #             outs.append(sympy.sympify(symbolic_out))
+
+    #     # ---------- BINARY OPS ----------
+    #     for i in range(self.n_binary_nos):
+    #         op_name = self.function_names[self.n_unary_nos + i]
+    #         op = self.functions_dict[op_name]
+
+    #         a = sympy.Integer(0)
+    #         b = sympy.Integer(0)
+    #         a_col = self.n_unary_nos + 2 * i
+    #         b_col = a_col + 1
+
+    #         for j in range(len(symbolic_inputs)):
+    #             w_a = self.weights[j, a_col].detach()
+    #             w_b = self.weights[j, b_col].detach()
+
+    #             coef_a = sympy.Float(float(w_a.real.cpu().item()))
+    #             coef_b = sympy.Float(float(w_b.real.cpu().item()))
+
+    #             a += _threshold_multiply(coef_a, symbolic_inputs[j], rounding_decimals)
+    #             b += _threshold_multiply(coef_b, symbolic_inputs[j], rounding_decimals)
+
+    #         if op_name == "div":
+    #             try:
+    #                 outs.append(sympy.cancel(a / b))
+    #             except Exception:
+    #                 outs.append(sympy.sympify(op(a, b)))
+    #         else:
+    #             outs.append(sympy.sympify(op(a, b)))
+
+    #     return outs
     def get_symbolic_output(
         self,
         symbolic_inputs: List[sympy.Expr],
@@ -85,7 +149,7 @@ class SymbolicLayer(nn.Module):
     ) -> List[sympy.Expr]:
         """
         Symbolic mirror of forward():
-          - mix inputs with (rounded) REAL PART of complex weights
+          - mix inputs with (rounded) REAL and IMAG parts of complex weights
           - apply each operator symbolically via functions_dict
         Returns list of sympy expressions, one per operator in this layer (unary first, then binary).
         """
@@ -98,9 +162,16 @@ class SymbolicLayer(nn.Module):
 
             for j in range(len(symbolic_inputs)):
                 w = self.weights[j, op_idx].detach()
-                coef_real = float(w.real.cpu().item())
-                coef_sym = sympy.Float(coef_real)
-                mixed += _threshold_multiply(coef_sym, symbolic_inputs[j], rounding_decimals)
+                # real part
+                coef_real = sympy.Float(float(w.real.cpu().item()))
+                mixed += _threshold_multiply(
+                    coef_real, symbolic_inputs[j], rounding_decimals
+                )
+                # imaginary part
+                coef_imag = sympy.Float(float(w.imag.cpu().item()))
+                mixed += sympy.I * _threshold_multiply(
+                    coef_imag, symbolic_inputs[j], rounding_decimals
+                )
 
             if op_name == "dydx":
                 op = self.functions_dict[op_name]
@@ -128,11 +199,25 @@ class SymbolicLayer(nn.Module):
                 w_a = self.weights[j, a_col].detach()
                 w_b = self.weights[j, b_col].detach()
 
-                coef_a = sympy.Float(float(w_a.real.cpu().item()))
-                coef_b = sympy.Float(float(w_b.real.cpu().item()))
+                # a: real + i imag
+                coef_a_real = sympy.Float(float(w_a.real.cpu().item()))
+                coef_a_imag = sympy.Float(float(w_a.imag.cpu().item()))
+                a += _threshold_multiply(
+                    coef_a_real, symbolic_inputs[j], rounding_decimals
+                )
+                a += sympy.I * _threshold_multiply(
+                    coef_a_imag, symbolic_inputs[j], rounding_decimals
+                )
 
-                a += _threshold_multiply(coef_a, symbolic_inputs[j], rounding_decimals)
-                b += _threshold_multiply(coef_b, symbolic_inputs[j], rounding_decimals)
+                # b: real + i imag
+                coef_b_real = sympy.Float(float(w_b.real.cpu().item()))
+                coef_b_imag = sympy.Float(float(w_b.imag.cpu().item()))
+                b += _threshold_multiply(
+                    coef_b_real, symbolic_inputs[j], rounding_decimals
+                )
+                b += sympy.I * _threshold_multiply(
+                    coef_b_imag, symbolic_inputs[j], rounding_decimals
+                )
 
             if op_name == "div":
                 try:
@@ -143,6 +228,7 @@ class SymbolicLayer(nn.Module):
                 outs.append(sympy.sympify(op(a, b)))
 
         return outs
+        
 
     def weights_for_reg(self) -> torch.Tensor:
         """
@@ -157,7 +243,7 @@ class SymbolicLayer(nn.Module):
         → (B, n_inputs), complex
         """
         effective_weights = self.weights * self.mask.to(self.weights.dtype)
-        return torch.matmul(X, effective_weights)
+        return torch.matmul(X.to(effective_weights.dtype), effective_weights)
 
     def prune_by_threshold(self, threshold: float) -> int:
         """
@@ -197,8 +283,8 @@ class SymbolicLayer(nn.Module):
         # unary
         for i, unary_no in enumerate(self.unary_nos):
             out = unary_no(X[:, i])  # X[:, i]: (B,)
-            if torch.isnan(out).any() or torch.isinf(out).any():
-                raise RuntimeError(f"NaN/Inf in unary op {i} (layer {self.layer_number})")
+            # if torch.isnan(out).any() or torch.isinf(out).any():
+            #     raise RuntimeError(f"NaN/Inf in unary op {i} (layer {self.layer_number})")
             results.append(out)  # (B,1)
 
         # binary
@@ -210,12 +296,18 @@ class SymbolicLayer(nn.Module):
             pair = torch.stack((num, den), dim=1)  # (B, 2)
             out = self.binary_nos[i](pair)         # (B,1)
 
-            if torch.isnan(out).any() or torch.isinf(out).any():
-                print(f"[DEBUG] layer {self.layer_number}, binary {i}")
-                print("  num stats:", num.min().item(), num.max().item())
-                print("  den stats:", den.min().item(), den.max().item())
-                print("  out stats:", out.min().item(), out.max().item())
-                raise RuntimeError(f"NaN/Inf in binary op {i} (layer {self.layer_number})")
+            # if torch.isnan(out).any() or torch.isinf(out).any():
+            #     print(f"[DEBUG] layer {self.layer_number}, binary {i}")
+
+            #     num_abs = num.abs()
+            #     den_abs = den.abs()
+            #     out_abs = out.abs()
+
+            #     print("  num |.| stats:", num_abs.min().item(), num_abs.max().item())
+            #     print("  den |.| stats:", den_abs.min().item(), den_abs.max().item())
+            #     print("  out |.| stats:", out_abs.min().item(), out_abs.max().item())
+
+            #     raise RuntimeError(f"NaN/Inf in binary op {i} (layer {self.layer_number})")
 
             results.append(out)
 
@@ -225,20 +317,20 @@ class SymbolicLayer(nn.Module):
         """
         X: (B, F_in)  ->  (B, n_ops)
         """
-        if torch.isnan(X).any() or torch.isinf(X).any():
-            raise RuntimeError(f"NaN/Inf in inputs at layer {self.layer_number}")
+        # if torch.isnan(X).any() or torch.isinf(X).any():
+        #     raise RuntimeError(f"NaN/Inf in inputs at layer {self.layer_number}")
 
         active = self.mask == 1.0
         if active.any():
             w_active = self.weights[active]
-            if torch.isnan(w_active).any() or torch.isinf(w_active).any():
-                raise RuntimeError(f"NaN/Inf in ACTIVE weights at layer {self.layer_number}")
+            # if torch.isnan(w_active).any() or torch.isinf(w_active).any():
+            #     raise RuntimeError(f"NaN/Inf in ACTIVE weights at layer {self.layer_number}")
 
         lifted = self.lift(X)        # (B, F_ops_in), complex
         out = self.apply_NOs(lifted) # (B, n_ops)
 
-        if torch.isnan(out).any() or torch.isinf(out).any():
-            raise RuntimeError(f"NaN/Inf in outputs at layer {self.layer_number}")
+        # if torch.isnan(out).any() or torch.isinf(out).any():
+        #     raise RuntimeError(f"NaN/Inf in outputs at layer {self.layer_number}")
 
         return out
 
@@ -273,21 +365,48 @@ class AssemblyLayer(nn.Module):
 
         self.functions_dict = cfg.functions_dict
 
+    # def get_symbolic_output(
+    #     self,
+    #     symbolic_inputs: List[sympy.Expr],
+    #     rounding_decimals: int = 2,
+    # ) -> sympy.Expr:
+    #     """
+    #     Sum_i Re(w_i) * symbolic_inputs[i] with thresholded rounding
+    #     to keep expressions compact.
+    #     """
+    #     out: sympy.Expr = sympy.Integer(0)
+    #     for i in range(len(symbolic_inputs)):
+    #         w = self.weights[i, 0].detach()
+    #         coef_real = float(w.real.cpu().item())
+    #         coef_sym = sympy.Float(coef_real)
+    #         out += _threshold_multiply(coef_sym, symbolic_inputs[i], rounding_decimals)
+    #     return sympy.sympify(out)
+
     def get_symbolic_output(
         self,
         symbolic_inputs: List[sympy.Expr],
         rounding_decimals: int = 2,
     ) -> sympy.Expr:
         """
-        Sum_i Re(w_i) * symbolic_inputs[i] with thresholded rounding
+        Sum_i (Re(w_i) + i Im(w_i)) * symbolic_inputs[i] with thresholded rounding
         to keep expressions compact.
         """
         out: sympy.Expr = sympy.Integer(0)
         for i in range(len(symbolic_inputs)):
             w = self.weights[i, 0].detach()
-            coef_real = float(w.real.cpu().item())
-            coef_sym = sympy.Float(coef_real)
-            out += _threshold_multiply(coef_sym, symbolic_inputs[i], rounding_decimals)
+
+            # real part
+            coef_real = sympy.Float(float(w.real.cpu().item()))
+            out += _threshold_multiply(
+                coef_real, symbolic_inputs[i], rounding_decimals
+            )
+
+            # imaginary part
+            coef_imag = sympy.Float(float(w.imag.cpu().item()))
+            out += sympy.I * _threshold_multiply(
+                coef_imag, symbolic_inputs[i], rounding_decimals
+            )
+
         return sympy.sympify(out)
 
     def prune_by_threshold(self, threshold: float) -> int:
@@ -319,10 +438,10 @@ class AssemblyLayer(nn.Module):
         → (B, 1), complex
         """
         effective_weights = self.weights * self.mask.to(self.weights.dtype)
-        if torch.isnan(X).any() or torch.isinf(X).any():
-            raise RuntimeError("NaN/Inf in X just before assembly matmul")
-        if torch.isnan(effective_weights).any() or torch.isinf(effective_weights).any():
-            raise RuntimeError("NaN/Inf in effective_weights in AssemblyLayer")
+        # if torch.isnan(X).any() or torch.isinf(X).any():
+        #     raise RuntimeError("NaN/Inf in X just before assembly matmul")
+        # if torch.isnan(effective_weights).any() or torch.isinf(effective_weights).any():
+        #     raise RuntimeError("NaN/Inf in effective_weights in AssemblyLayer")
 
         result = torch.matmul(X, effective_weights)  # (B, 1)
         return result
@@ -361,18 +480,39 @@ class ComplexEQL(nn.Module):
             sym_out = layer.get_symbolic_output(sym_out, rounding_decimals=rounding_decimals)
         return self.assembly_layer.get_symbolic_output(sym_out, rounding_decimals=rounding_decimals)
 
-    def get_weights_list(self) -> list[torch.Tensor]:
+    def get_real_weights_list(self) -> list[torch.Tensor]:
         """
-        Return a flat list of 1D tensors: complex mixing weights of each layer
-        and complex assembly weights.
+        Return a flat list of 1D REAL tensors: real parts of all complex weights
+        (symbolic layers + assembly layer), for use in real-valued regularization.
         """
         weights_list: list[torch.Tensor] = []
 
         for layer in self.symbolic_layers:
-            weights_list.append(layer.weights.view(-1))
+            # layer.weights: complex -> take real part
+            weights_list.append(layer.weights.real.view(-1))
 
-        weights_list.append(self.assembly_layer.weights.view(-1))  # complex
+        # assembly weights: complex -> real part
+        weights_list.append(self.assembly_layer.weights.real.view(-1))
 
+        return weights_list
+
+    def get_imag_weights_list(self) -> list[torch.Tensor]:
+        """
+        Return a flat list of 1D REAL tensors: imaginary parts of all complex weights
+        (symbolic layers + assembly layer), for use in imaginary-part regularization.
+    
+        Each tensor is detached view of the imaginary components.
+        """
+        weights_list: list[torch.Tensor] = []
+    
+        # symbolic layers
+        for layer in self.symbolic_layers:
+            # layer.weights: complex -> take imag part, flatten
+            weights_list.append(layer.weights.imag.view(-1))
+    
+        # assembly layer
+        weights_list.append(self.assembly_layer.weights.imag.view(-1))
+    
         return weights_list
 
     def prune_by_threshold(self, threshold: float) -> int:
