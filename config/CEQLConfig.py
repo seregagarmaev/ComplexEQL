@@ -11,7 +11,7 @@ class ModelTrainingConfig:
     # -------------------------
     lr = 1e-3
     scheduler = "ReduceLROnPlateau"
-    schedulerparams = dict(mode="min", patience=100, factor=0.1, min_lr=1e-4)
+    schedulerparams = dict(mode="min", patience=500, factor=0.1, min_lr=1e-3)
     scheduler_warmup_phase2 = 500
 
     # -------------------------
@@ -36,7 +36,7 @@ class ModelTrainingConfig:
 
     # plateau logic: after anneal in each cycle, monitor data loss
     imag_plateau_patience = 500
-    imag_plateau_rel_tol = 1e-4
+    imag_plateau_rel_tol = 1e-12
     imag_plateau_check_after_anneal = True  # start plateau counting only after anneal is finished in the cycle
     imag_plateau_min_epoch_in_phase = 0     # additional warmup in each phase before plateau logic starts
 
@@ -75,7 +75,7 @@ class ModelTrainingConfig:
     # ==========================================================
     # Phase 3: keep imag penalty "big" (fixed), no anneal/reset, no sparsity/pruning
     # ==========================================================
-    imag_w_coeff_phase3 = imag_w_coeff_end  # fixed coefficient in phase 3
+    imag_w_coeff_phase3 = imag_w_coeff_end
     
     
 
@@ -87,29 +87,31 @@ class NomtoConfig:
             {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
+            # {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
             # {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
             # {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
             # {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
             # {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-8},
             # {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
             {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-8},
-            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-8},
-            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-8},
+            # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-8},
+            # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-8},
             # {'library_function': 'pow',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 5.0},
         ],
         # [
         #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+        #     # {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+        #     # {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
         #     {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
         #     {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
         #     {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
+        #     # {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
         #     {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-8},
         #     {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
         #     {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-8},
-        #     {'library_function': 'pow',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 5.0},
+        #     # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-8},
+        #     # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-8},
+        #     # {'library_function': 'pow',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 5.0},
         # ],
     ]
 

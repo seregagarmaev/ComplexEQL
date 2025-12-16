@@ -261,7 +261,7 @@ def train_one_epoch(
 def train(
     model: torch.nn.Module,
     dataloader: DataLoader,
-    optimizer: torch.optim.Optimizer,  # ignored (re-init per phase)
+    optimizer: torch.optim.Optimizer,  # ignored
     loss_fn: Callable,
     cfg,
     device: torch.device | str,
@@ -278,11 +278,20 @@ def train(
             return torch.optim.lr_scheduler.ReduceLROnPlateau(opt, **cfg.schedulerparams)
         return None
 
-    def _plateau_update(best: float, no_improve: int, current: float, rel_tol: float) -> tuple[float, int]:
-        # improvement if current <= best*(1-rel_tol)
+    def _plateau_update(
+        best: float, no_improve: int, current: float, rel_tol: float
+    ) -> tuple[float, int]:
+        # improvement if current <= best * (1 - rel_tol)
         if current <= best * (1.0 - rel_tol):
             return current, 0
         return best, no_improve + 1
+
+    # ----------------------------------------------------------
+    # Single optimizer + scheduler for all phases.
+    # Scheduler is reset ONLY when we reinit imaginary weights.
+    # ----------------------------------------------------------
+    opt = torch.optim.Adam(model.parameters(), lr=cfg.lr)
+    sch = _make_scheduler(opt)
 
     def _run_phase(
         phase_name: str,
@@ -298,9 +307,7 @@ def train(
         phase2_scheduler_warmup: int = 0,
     ):
         nonlocal global_epoch, sl0_weights, al_weights, data_losses, imag_w_losses
-
-        opt = torch.optim.Adam(model.parameters(), lr=cfg.lr)
-        sch = _make_scheduler(opt)
+        nonlocal opt, sch
 
         # cycle state for imag anneal/reset
         cycle_epoch = 0
@@ -308,7 +315,7 @@ def train(
         no_improve = 0
 
         for e in range(num_epochs):
-            # imag coefficient: fixed (phase3) or annealed per cycle (phase1/2)
+            # imag coefficient: fixed (phase 3) or annealed per cycle (phases 1/2)
             if imag_coeff_fixed is not None:
                 imag_coeff = float(imag_coeff_fixed)
             else:
@@ -320,7 +327,7 @@ def train(
                     mode=cfg.imag_anneal_mode,
                 )
 
-            # sparsity schedule (your existing compute_alpha)
+            # sparsity schedule
             if l1l0_enabled and l1l0_coeff > 0.0:
                 alpha_t, sparsity_enabled = compute_alpha(
                     e,
@@ -343,7 +350,7 @@ def train(
                 dataloader=dataloader,
                 model=model,
                 loss_fn=loss_fn,
-                optimizer=opt,
+                optimizer=opt,  # persistent optimizer
                 device=device,
                 alpha_t=alpha_t,
                 sparsity_enabled=sparsity_enabled,
@@ -357,7 +364,7 @@ def train(
                 prune_threshold=cfg.pruning_threshold if prune_now else 0.0,
             )
 
-            # scheduler
+            # scheduler (persistent; reset only on imag reinit)
             if sch is not None:
                 if phase_name == "Phase 2" and e < phase2_scheduler_warmup:
                     pass
@@ -375,9 +382,7 @@ def train(
 
             # plateau -> reset imag weights & restart anneal cycle (phases 1/2)
             if do_resets and imag_enabled:
-                # only start plateau counting after optional warmup
                 if e >= cfg.imag_plateau_min_epoch_in_phase:
-                    # optionally require anneal to be finished within the cycle
                     can_check = True
                     if cfg.imag_plateau_check_after_anneal:
                         can_check = cycle_epoch >= cfg.imag_anneal_epochs
@@ -387,7 +392,18 @@ def train(
                             best_data, no_improve, avg_data, cfg.imag_plateau_rel_tol
                         )
                         if no_improve >= cfg.imag_plateau_patience:
+                            # 1) reinit imaginary weights
                             reinit_imag_weights_(model, cfg.imag_reinit_scale)
+
+                            # 2) reset optimizer LR to initial value
+                            for g in opt.param_groups:
+                                g["lr"] = cfg.lr
+
+                            # 3) re-create scheduler (fresh state)
+                            if sch is not None:
+                                sch = _make_scheduler(opt)
+
+                            # 4) restart cycle
                             cycle_epoch = 0
                             best_data = float("inf")
                             no_improve = 0
@@ -438,7 +454,7 @@ def train(
     )
 
     # --------------------------
-    # PHASE 3 (fixed big imag penalty, no resets, no sparsity, no pruning)
+    # PHASE 3
     # --------------------------
     _run_phase(
         "Phase 3",
@@ -453,3 +469,4 @@ def train(
     )
 
     return model, (sl0_weights, sl1_weights, al_weights, imag_w_losses, data_losses)
+
