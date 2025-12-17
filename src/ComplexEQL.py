@@ -21,6 +21,18 @@ def _threshold_multiply(coef: sympy.Number, val: sympy.Expr, decimals: int) -> s
     except Exception:
         return coef * val
 
+def nan_to_num_complex(x: torch.Tensor, nan: float = 0.0, posinf: float = 0.0, neginf: float = 0.0) -> torch.Tensor:
+    """
+    torch.nan_to_num for complex tensors on backends where complex is not supported (e.g., MPS).
+    Applies nan_to_num to real and imag parts separately.
+    """
+    if torch.is_complex(x):
+        return torch.complex(
+            torch.nan_to_num(x.real, nan=nan, posinf=posinf, neginf=neginf),
+            torch.nan_to_num(x.imag, nan=nan, posinf=posinf, neginf=neginf),
+        )
+    return torch.nan_to_num(x, nan=nan, posinf=posinf, neginf=neginf)
+
 
 class SymbolicLayer(nn.Module):
     """
@@ -262,12 +274,13 @@ class SymbolicLayer(nn.Module):
                 torch.zeros_like(self.weights.imag[to_prune]),
             )
 
-            self.weights.data = torch.nan_to_num(
-                self.weights.data,
-                nan=0.0,
-                posinf=0.0,
-                neginf=0.0,
-            )
+            # self.weights.data = torch.nan_to_num(
+            #     self.weights.data,
+            #     nan=0.0,
+            #     posinf=0.0,
+            #     neginf=0.0,
+            # )
+            self.weights.data = nan_to_num_complex(self.weights.data, nan=0.0, posinf=0.0, neginf=0.0)
 
         return num_pruned
 
@@ -422,12 +435,13 @@ class AssemblyLayer(nn.Module):
                 torch.zeros_like(self.weights.imag[to_prune]),
             )
 
-            self.weights.data = torch.nan_to_num(
-                self.weights.data,
-                nan=0.0,
-                posinf=0.0,
-                neginf=0.0,
-            )
+            # self.weights.data = torch.nan_to_num(
+            #     self.weights.data,
+            #     nan=0.0,
+            #     posinf=0.0,
+            #     neginf=0.0,
+            # )
+            self.weights.data = nan_to_num_complex(self.weights.data, nan=0.0, posinf=0.0, neginf=0.0)
 
         return num_pruned
 
@@ -532,7 +546,8 @@ class ComplexEQL(nn.Module):
                 if p.grad is None:
                     continue
                 g = p.grad.data
-                g = torch.nan_to_num(g, nan=0.0, posinf=0.0, neginf=0.0)
+                # g = torch.nan_to_num(g, nan=0.0, posinf=0.0, neginf=0.0)
+                g = nan_to_num_complex(g, nan=0.0, posinf=0.0, neginf=0.0)
                 mag = torch.abs(g)
                 mask = mag > max_grad
                 if mask.any():
@@ -558,12 +573,14 @@ class ComplexEQL(nn.Module):
         with torch.no_grad():
             for layer in self.symbolic_layers:
                 w = layer.weights.data
-                w = torch.nan_to_num(w, nan=0.0, posinf=0.0, neginf=0.0)
+                # w = torch.nan_to_num(w, nan=0.0, posinf=0.0, neginf=0.0)
+                w = nan_to_num_complex(w, nan=0.0, posinf=0.0, neginf=0.0)
                 w = _clamp_complex_by_magnitude(w, clamp_value)
                 layer.weights.data.copy_(w)
 
             w = self.assembly_layer.weights.data
-            w = torch.nan_to_num(w, nan=0.0, posinf=0.0, neginf=0.0)
+            # w = torch.nan_to_num(w, nan=0.0, posinf=0.0, neginf=0.0)
+            w = nan_to_num_complex(w, nan=0.0, posinf=0.0, neginf=0.0)
             w = _clamp_complex_by_magnitude(w, clamp_value)
             self.assembly_layer.weights.data.copy_(w)
 

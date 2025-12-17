@@ -2,7 +2,7 @@ import sympy as sp
 
 
 class ModelTrainingConfig:
-    device = "cuda:2"
+    device = "mps"
     loss_function = "MSELoss"
     train_batch_size = 2**14
 
