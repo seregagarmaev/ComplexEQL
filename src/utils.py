@@ -297,7 +297,7 @@ def train(
     # Scheduler is reset ONLY when we reinit imaginary weights.
     # ----------------------------------------------------------
     opt = torch.optim.Adam(model.parameters(), lr=cfg.lr)
-    sch = _make_scheduler(opt)
+    sch = None # _make_scheduler(opt)
 
     def _run_phase(
         phase_name: str,
@@ -373,11 +373,13 @@ def train(
             )
 
             # scheduler (persistent; reset only on imag reinit)
-            if sch is not None:
-                if phase_name == "Phase 2" and e < phase2_scheduler_warmup:
-                    pass
-                else:
-                    sch.step(avg_total)
+            # if sch is not None:
+            #     if phase_name == "Phase 2" and e < phase2_scheduler_warmup:
+            #         pass
+            #     else:
+            #         sch.step(avg_total)
+            if (phase_name == "Phase 3") and (sch is not None):
+                sch.step(avg_data)
 
             if (global_epoch + 1) % cfg.print_every == 0 or global_epoch == 0:
                 lr = opt.param_groups[0]["lr"]
@@ -464,6 +466,7 @@ def train(
     # --------------------------
     # PHASE 3
     # --------------------------
+    sch = _make_scheduler(opt)
     _run_phase(
         "Phase 3",
         cfg.phase3_epochs,

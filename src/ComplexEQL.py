@@ -66,8 +66,8 @@ class SymbolicLayer(nn.Module):
         self.n_inputs = self.n_unary_nos + 2 * self.n_binary_nos
 
         # complex weights initialization
-        real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * 0.1
-        imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * 0.1
+        real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) #* 0.1
+        imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) #* 0.1
         init_w = torch.complex(real, imag)  # (F_in, n_inputs), complex
         self.weights = nn.Parameter(init_w)
         self.mask = nn.Parameter(torch.ones_like(real), requires_grad=False)  # real mask
@@ -283,6 +283,8 @@ class SymbolicLayer(nn.Module):
             w_b = self.weights[:, b_col]
 
             # max magnitude among ACTIVE weights across numerator+denominator
+            # max_a = w_a.real[m_a].abs().max() if m_a.any() else torch.tensor(0.0, device=w_a.device)
+            # max_b = w_b.real[m_b].abs().max() if m_b.any() else torch.tensor(0.0, device=w_b.device)
             max_a = w_a[m_a].abs().max() if m_a.any() else torch.tensor(0.0, device=w_a.device)
             max_b = w_b[m_b].abs().max() if m_b.any() else torch.tensor(0.0, device=w_b.device)
             scale = torch.maximum(max_a, max_b)
@@ -432,8 +434,8 @@ class AssemblyLayer(nn.Module):
             self.weights = nn.Parameter(init_w)
             self.mask = nn.Parameter(torch.ones_like(w_real), requires_grad=False)
         else:
-            real = (torch.rand(last_layer_nos, 1) - 0.5) * 0.1
-            imag = (torch.rand(last_layer_nos, 1) - 0.5) * 0.1
+            real = (torch.rand(last_layer_nos, 1) - 0.5) #* 0.1
+            imag = (torch.rand(last_layer_nos, 1) - 0.5) #* 0.1
             init_w = torch.complex(real, imag)
             self.weights = nn.Parameter(init_w)
             self.mask = nn.Parameter(torch.ones_like(real), requires_grad=False)

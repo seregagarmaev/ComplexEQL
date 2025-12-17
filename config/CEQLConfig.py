@@ -9,9 +9,9 @@ class ModelTrainingConfig:
     # -------------------------
     # Optimization
     # -------------------------
-    lr = 1e-4
+    lr = 1e-3
     scheduler = "ReduceLROnPlateau"
-    schedulerparams = dict(mode="min", patience=500, factor=0.1, min_lr=1e-4)
+    schedulerparams = dict(mode="min", patience=500, factor=0.1, min_lr=1e-8)
     scheduler_warmup_phase2 = 500
 
     # -------------------------
@@ -36,12 +36,12 @@ class ModelTrainingConfig:
 
     # plateau logic: after anneal in each cycle, monitor data loss
     imag_plateau_patience = 500
-    imag_plateau_rel_tol = 1e-12
+    imag_plateau_rel_tol = 1e-4
     imag_plateau_check_after_anneal = True  # start plateau counting only after anneal is finished in the cycle
     imag_plateau_min_epoch_in_phase = 0     # additional warmup in each phase before plateau logic starts
 
     # when plateau triggers: reinit Im(weights) and restart anneal cycle
-    imag_reinit_scale = 0.1  # Im ~ U(-scale/2, scale/2) for active weights
+    imag_reinit_scale = 1.0  # Im ~ U(-scale/2, scale/2) for active weights
 
     # ==========================================================
     # Sparsification (Phase 2 only): L1L0 on REAL(weights) only
@@ -91,32 +91,34 @@ class NomtoConfig:
             {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
+            # {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
+            # {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
+            # {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
+            # {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-8},
+            # {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
+            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
+            # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
+            # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
+            # {'library_function': 'pow',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 5.0},
+        ],
+        [
+            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
             # {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
             # {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
             # {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
             # {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
             # {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-8},
             # {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
-            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-8},
-            # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-8},
-            # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-8},
+            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
+            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
+            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
+            # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
+            # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
             # {'library_function': 'pow',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 5.0},
         ],
-        # [
-        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-        #     # {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-        #     # {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
-        #     # {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-8},
-        #     {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
-        #     {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-8},
-        #     # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-8},
-        #     # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-8},
-        #     # {'library_function': 'pow',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 5.0},
-        # ],
     ]
 
     n_input_fields = 2
