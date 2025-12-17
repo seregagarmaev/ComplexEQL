@@ -240,7 +240,68 @@ class SymbolicLayer(nn.Module):
                 outs.append(sympy.sympify(op(a, b)))
 
         return outs
+
+    @torch.no_grad()
+    def normalize_division_mixing_(self, eps: float = 1e-12) -> int:
+        """
+        For each binary op that is 'div', find the maximum |w| among the
+        active mixing weights used by numerator and denominator, and divide
+        BOTH numerator and denominator mixing weights by this value.
+
+        This keeps (a / b) invariant (since a and b are both scaled),
+        but prevents non-identifiability from drifting weights toward zero.
+
+        Returns
+        -------
+        int
+            Number of div-operators that were normalized (i.e., had scale > eps).
+        """
+        normalized = 0
+
+        if self.n_binary_nos == 0:
+            return 0
         
+        # binary ops are indexed after unary ops in self.function_names
+        for i in range(self.n_binary_nos):
+            op_name = self.function_names[self.n_unary_nos + i]
+            if op_name != "div":
+                continue
+
+            a_col = self.n_unary_nos + 2 * i
+            b_col = a_col + 1
+
+            # active mask for these columns
+            m_a = self.mask[:, a_col].bool()
+            m_b = self.mask[:, b_col].bool()
+
+            # if everything is pruned, nothing to do
+            if (not m_a.any()) and (not m_b.any()):
+                continue
+
+            w_a = self.weights[:, a_col]
+            w_b = self.weights[:, b_col]
+
+            # max magnitude among ACTIVE weights across numerator+denominator
+            max_a = w_a[m_a].abs().max() if m_a.any() else torch.tensor(0.0, device=w_a.device)
+            max_b = w_b[m_b].abs().max() if m_b.any() else torch.tensor(0.0, device=w_b.device)
+            scale = torch.maximum(max_a, max_b)
+
+            if scale <= eps:
+                continue
+
+            # scale BOTH columns (only active entries) to preserve a/b
+            w_a_new = torch.where(m_a, w_a / scale, w_a)
+            w_b_new = torch.where(m_b, w_b / scale, w_b)
+
+            self.weights[:, a_col] = w_a_new
+            self.weights[:, b_col] = w_b_new
+
+            # safety
+            self.weights.data = nan_to_num_complex(self.weights.data, nan=0.0, posinf=0.0, neginf=0.0)
+
+            normalized += 1
+
+        return normalized
 
     def weights_for_reg(self) -> torch.Tensor:
         """
@@ -534,6 +595,21 @@ class ComplexEQL(nn.Module):
         for layer in self.symbolic_layers:
             total += layer.prune_by_threshold(threshold)
         total += self.assembly_layer.prune_by_threshold(threshold)
+        return total
+
+    @torch.no_grad()
+    def normalize_all_divisions_(self, eps: float = 1e-12) -> int:
+        """
+        Apply division-mixing normalization to all symbolic layers.
+
+        Returns
+        -------
+        int
+            Total number of div-operators normalized across all layers.
+        """
+        total = 0
+        for layer in self.symbolic_layers:
+            total += layer.normalize_division_mixing_(eps=eps)
         return total
 
     def sanitize_gradients(self, max_grad: float = 1e3) -> None:

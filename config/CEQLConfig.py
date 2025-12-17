@@ -76,6 +76,10 @@ class ModelTrainingConfig:
     # Phase 3: keep imag penalty "big" (fixed), no anneal/reset, no sparsity/pruning
     # ==========================================================
     imag_w_coeff_phase3 = imag_w_coeff_end
+
+    # division normalization
+    normalize_divisions = True
+    normalize_divisions_eps = 1e-12
     
     
 

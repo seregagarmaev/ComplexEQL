@@ -184,6 +184,8 @@ def train_one_epoch(
     l1l0_eps: float,
     prune_now: bool,
     prune_threshold: float,
+    normalize_divisions: bool = False,
+    normalize_divisions_eps: float = 1e-12,
 ):
     model.train()
     device = torch.device(device)
@@ -248,6 +250,10 @@ def train_one_epoch(
         if pruned > 0:
             print(f"[prune] Epoch {epoch}: pruned {pruned} weights (|w| < {prune_threshold:g})")
 
+    # normalize division mixing once per epoch
+    if normalize_divisions:
+        n_norm = model.normalize_all_divisions_(eps=normalize_divisions_eps)
+    
     denom = max(1, num_samples)
     return (
         total_loss / denom,
@@ -362,6 +368,8 @@ def train(
                 l1l0_eps=cfg.l1l0_eps,
                 prune_now=prune_now,
                 prune_threshold=cfg.pruning_threshold if prune_now else 0.0,
+                normalize_divisions=cfg.normalize_divisions,
+                normalize_divisions_eps=cfg.normalize_divisions_eps,
             )
 
             # scheduler (persistent; reset only on imag reinit)
