@@ -417,8 +417,8 @@ def train(
                 cycle_epoch += 1
 
             global_epoch += 1
-            sl0_weights.append(model.symbolic_layers[0].weights.detach().cpu().numpy())
-            al_weights.append(model.assembly_layer.weights.detach().cpu().numpy())
+            sl0_weights.append(model.symbolic_layers[0].weights.detach().cpu().clone().numpy().copy())
+            al_weights.append(model.assembly_layer.weights.detach().cpu().clone().numpy().copy())
             data_losses.append(avg_data)
             imag_w_losses.append(avg_imag_w_reg)
 

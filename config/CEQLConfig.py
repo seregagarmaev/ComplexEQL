@@ -2,7 +2,7 @@ import sympy as sp
 
 
 class ModelTrainingConfig:
-    device = "mps"
+    device = "cpu"
     loss_function = "MSELoss"
     train_batch_size = 2**14
 
