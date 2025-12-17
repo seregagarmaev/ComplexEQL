@@ -9,9 +9,9 @@ class ModelTrainingConfig:
     # -------------------------
     # Optimization
     # -------------------------
-    lr = 1e-3
+    lr = 1e-4
     scheduler = "ReduceLROnPlateau"
-    schedulerparams = dict(mode="min", patience=500, factor=0.1, min_lr=1e-3)
+    schedulerparams = dict(mode="min", patience=500, factor=0.1, min_lr=1e-4)
     scheduler_warmup_phase2 = 500
 
     # -------------------------
