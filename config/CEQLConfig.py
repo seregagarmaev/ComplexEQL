@@ -17,9 +17,9 @@ class ModelTrainingConfig:
     # -------------------------
     # Phase control
     # -------------------------
-    phase1_epochs = 10000
-    phase2_epochs = 10000
-    phase3_epochs = 5000
+    phase1_epochs = 30000
+    phase2_epochs = 20000
+    phase3_epochs = 10000
     print_every = 100
 
     # ==========================================================
@@ -75,7 +75,7 @@ class ModelTrainingConfig:
     # ==========================================================
     # Phase 3: keep imag penalty "big" (fixed), no anneal/reset, no sparsity/pruning
     # ==========================================================
-    imag_w_coeff_phase3 = imag_w_coeff_end
+    imag_w_coeff_phase3 = 1e10 #imag_w_coeff_end
 
     # division normalization
     normalize_divisions = True
@@ -89,36 +89,43 @@ class NomtoConfig:
     no_params_list = [
         [
             {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-            # {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-            # {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
-            # {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-            # {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-8},
-            # {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
-            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
-            # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
-            # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
-            # {'library_function': 'pow',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 5.0},
-        ],
-        [
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            # {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            # {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
             # {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
             # {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
             # {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
             # {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-            # {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-8},
+            # {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
+            # {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
+            # {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            # {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            # {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
+            # {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
+            # {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
             # {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
-            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
-            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
-            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
-            # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
             # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
             # {'library_function': 'pow',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 5.0},
         ],
+        # [
+        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+        #     {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
+        #     {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
+        #     {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
+        #     {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
+        #     {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
+        #     {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
+        #     {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
+        #     {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
+        #     {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
+        #     {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
+        #     {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
+        #     {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
+        #     {'library_function': 'pow',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 5.0},
+        # ],
     ]
 
     n_input_fields = 2
@@ -131,7 +138,9 @@ class NomtoConfig:
         'square': lambda x: x**2,
         'cube':   lambda x: x**3,
         'sqrt':   lambda x: sp.sqrt(x),
+        'exp':    lambda x: sp.exp(x),
         'sin':    lambda x: sp.sin(x),
+        'cos':    lambda x: sp.cos(x),
         'log':    lambda x: sp.log(x),
         'mul':    lambda a, b: a * b,
         'div':    lambda a, b: a / b,

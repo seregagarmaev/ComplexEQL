@@ -5,25 +5,25 @@ import torch
 import torch.nn as nn
 
 
-def _safe_complex_log(z: torch.Tensor) -> torch.Tensor:
-    eps = 1e-6
-    max_r = 1e6
+# def _safe_complex_log(z: torch.Tensor) -> torch.Tensor:
+#     eps = 1e-6
+#     max_r = 1e6
 
-    if torch.is_complex(z):
-        mag = z.abs()
-        mag_clamped = torch.clamp(mag, eps, max_r)
-        scale = mag_clamped / (mag + eps)
-        z_clamped = z * scale
-    else:
-        z_clamped = torch.clamp(z, eps, max_r)
+#     if torch.is_complex(z):
+#         mag = z.abs()
+#         mag_clamped = torch.clamp(mag, eps, max_r)
+#         scale = mag_clamped / (mag + eps)
+#         z_clamped = z * scale
+#     else:
+#         z_clamped = torch.clamp(z, eps, max_r)
 
-    out = torch.log(z_clamped)
+#     out = torch.log(z_clamped)
 
-    finite_mask = torch.isfinite(out)
-    if not finite_mask.all():
-        out = out.clone()
-        out[~finite_mask] = 0.0
-    return out
+#     finite_mask = torch.isfinite(out)
+#     if not finite_mask.all():
+#         out = out.clone()
+#         out[~finite_mask] = 0.0
+#     return out
 
 # ======================
 # UNARY OPERATIONS
@@ -54,40 +54,46 @@ def sqrt_operation(x: torch.Tensor) -> torch.Tensor:
 #     # complex logarithm
 #     return torch.log(x).unsqueeze(-1)
 
-def log_operation(x: torch.Tensor, stair_step_size: float | None = None) -> torch.Tensor:
+def log_operation(x: torch.Tensor, stair_step_size: float) -> torch.Tensor:
     """
-    Complex log with optional stair gating.
+    Complex logarithm with stair gating.
 
-    - If stair_step_size is None: plain safe complex log.
-    - If stair_step_size is given: for |x| <= stair_step_size/2, output 0;
-      else apply safe complex log.
+    For |x| <= stair_step_size / 2:
+        output = 0
+    For |x| > stair_step_size / 2:
+        output = log(x_safe)
+
+    Returns (B, 1)
     """
+    eps = 1e-8
+
     z = x
 
-    # no stair: just safe log
-    if stair_step_size is None:
-        out = _safe_complex_log(z)
-        return out.unsqueeze(-1)
+    # magnitude
+    mag = z.abs() if torch.is_complex(z) else torch.abs(z)
 
-    # stair: gate small magnitudes
+    # stair gate
     stair = torch.as_tensor(
         stair_step_size,
         device=z.device,
-        dtype=z.real.dtype if torch.is_complex(z) else z.dtype,
+        dtype=mag.dtype,
     )
-
-    mag = z.abs() if torch.is_complex(z) else torch.abs(z)
     mask = mag > (stair / 2.0)
 
-    out = torch.zeros_like(
-        z,
-        dtype=z.dtype,
-        device=z.device,
-    )
+    # avoid log(0) while preserving phase
+    scale = mag / (mag + eps)
+    z_safe = z * scale + eps
 
-    if mask.any():
-        out_sel = _safe_complex_log(z[mask])
-        out[mask] = out_sel
+    out = torch.log(z_safe)
+
+    # apply stair
+    out = torch.where(mask, out, torch.zeros_like(out))
+
+    # safety: remove NaN / Inf
+    finite = torch.isfinite(out)
+    if not finite.all():
+        out = out.clone()
+        out[~finite] = 0.0
 
     return out.unsqueeze(-1)
 
@@ -96,12 +102,24 @@ def exponent_operation(x: torch.Tensor) -> torch.Tensor:
     return torch.exp(x).unsqueeze(-1)
 
 
-def sin_operation(x: torch.Tensor) -> torch.Tensor:
-    return torch.sin(x).unsqueeze(-1)
+def sin_operation(x: torch.Tensor, damp_gamma: float, damp_p: float) -> torch.Tensor:
+    u = x.real
+    v = x.imag
+    eps = 1e-12
+    damp = torch.exp(-damp_gamma * torch.pow(v.abs() + eps, damp_p))
+    y_real = torch.sin(u) * damp
+    y = torch.complex(y_real, torch.zeros_like(y_real))
+    return y.unsqueeze(-1)
 
 
-def cos_operation(x: torch.Tensor) -> torch.Tensor:
-    return torch.cos(x).unsqueeze(-1)
+def cos_operation(x: torch.Tensor, damp_gamma: float, damp_p: float) -> torch.Tensor:
+    u = x.real
+    v = x.imag
+    eps = 1e-12
+    damp = torch.exp(-damp_gamma * torch.pow(v.abs() + eps, damp_p))
+    y_real = torch.cos(u) * damp
+    y = torch.complex(y_real, torch.zeros_like(y_real))
+    return y.unsqueeze(-1)
 
 
 # ======================
@@ -212,18 +230,22 @@ def power_operation(x1: torch.Tensor, x2: torch.Tensor, stair_step_size: float |
 
 class UnarySurrogate(nn.Module):
     """Wrap an exact unary operation (no learnable params here)."""
-    def __init__(self, operation, cfg, fname, ftype, stair_step_size: float | None = None):
+    def __init__(self, operation, cfg, fname, ftype, stair_step_size: float | None = None, damp_gamma: float | None = None, damp_p: float | None = None,):
         super().__init__()
         self.operation = operation
         self.cfg = cfg
         self.fname = fname
         self.ftype = ftype
         self.stair_step_size = stair_step_size
+        self.damp_gamma = damp_gamma
+        self.damp_p = damp_p
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (B,)
         if self.stair_step_size is not None:
             out = self.operation(x, self.stair_step_size)
+        elif self.damp_gamma is not None:
+            out = self.operation(x, self.damp_gamma, self.damp_p)
         else:
             out = self.operation(x)
         return out  # (B,1)
@@ -292,9 +314,9 @@ def load_models(cfg, layer_idx: int):
             elif op == "exp":
                 model = UnarySurrogate(exponent_operation, cfg, op, optype)
             elif op == "sin":
-                model = UnarySurrogate(sin_operation, cfg, op, optype)
+                model = UnarySurrogate(sin_operation, cfg, op, optype, damp_gamma=params["damp_gamma"], damp_p=params["damp_p"])
             elif op == "cos":
-                model = UnarySurrogate(cos_operation, cfg, op, optype)
+                model = UnarySurrogate(cos_operation, cfg, op, optype, damp_gamma=params["damp_gamma"], damp_p=params["damp_p"])
             else:
                 raise ValueError(f"Unknown exact unary operation '{op}'")
             unary_nos.append(model)

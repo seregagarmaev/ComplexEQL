@@ -50,3 +50,178 @@ def filter_imaginary_part(expr: sp.Expr, real_symbols: list[sp.Symbol]) -> sp.Ex
     # Final cleanup
     e = sp.simplify(e)
     return e
+
+# def prune_small_coeff_terms(expr: sp.Expr, decimals: int) -> sp.Expr:
+#     """
+#     Recursively remove additive / multiplicative terms whose numeric prefactor
+#     rounds to zero at the given number of decimals.
+
+#     Works inside nested expressions (sqrt, pow, div, etc.) and correctly handles
+#     scientific notation (e.g. 5e-8).
+
+#     Parameters
+#     ----------
+#     expr : sympy.Expr
+#         Input symbolic expression.
+#     decimals : int
+#         Number of decimal digits to keep. Coefficients that round to 0 at this
+#         precision are pruned.
+
+#     Returns
+#     -------
+#     sympy.Expr
+#         Pruned expression.
+#     """
+#     expr = sp.sympify(expr)
+
+#     # atoms (symbols, numbers)
+#     if expr.is_Atom:
+#         return expr
+
+#     # ---------- sums ----------
+#     if expr.is_Add:
+#         kept = []
+#         for term in expr.args:
+#             t = prune_small_coeff_terms(term, decimals)
+#             if t == 0:
+#                 continue
+
+#             c, rest = t.as_coeff_Mul()   # t = c * rest
+#             if c.is_number:
+#                 try:
+#                     # round numerically
+#                     c_round = round(float(sp.N(c)), decimals)
+#                     if c_round == 0.0:
+#                         continue
+#                     # rebuild term with rounded coefficient
+#                     t = sp.Float(c_round) * rest
+#                 except Exception:
+#                     pass
+
+#             kept.append(t)
+
+#         return sp.Add(*kept) if kept else sp.Integer(0)
+
+#     # ---------- products ----------
+#     if expr.is_Mul:
+#         factors = [prune_small_coeff_terms(a, decimals) for a in expr.args]
+#         if any(f == 0 for f in factors):
+#             return sp.Integer(0)
+
+#         new_expr = sp.Mul(*factors)
+
+#         c, rest = new_expr.as_coeff_Mul()
+#         if c.is_number:
+#             try:
+#                 c_round = round(float(sp.N(c)), decimals)
+#                 if c_round == 0.0:
+#                     return sp.Integer(0)
+#                 return sp.Float(c_round) * rest
+#             except Exception:
+#                 return new_expr
+
+#         return new_expr
+
+#     # ---------- powers ----------
+#     if expr.is_Pow:
+#         base = prune_small_coeff_terms(expr.base, decimals)
+#         exp  = prune_small_coeff_terms(expr.exp, decimals)
+#         return sp.Pow(base, exp)
+
+#     # ---------- generic functions (sqrt, sin, log, etc.) ----------
+#     if expr.args:
+#         new_args = [prune_small_coeff_terms(a, decimals) for a in expr.args]
+#         try:
+#             return expr.func(*new_args)
+#         except Exception:
+#             return expr
+
+#     return expr
+
+def prune_small_coeff_terms(expr: sp.Expr, decimals: int) -> sp.Expr:
+    """
+    Recursively prune terms whose numeric prefactor rounds to 0 at `decimals`.
+
+    Also prunes *after expanding additive structure* locally:
+    - For each Add node, expand it (distribute products into sums), then prune.
+    This enables pruning of small coefficients hidden inside products like a*(x+y).
+
+    Parameters
+    ----------
+    expr : sympy.Expr
+        Input symbolic expression.
+    decimals : int
+        Number of decimal digits to keep. Coefficients that round to 0 at this
+        precision are pruned.
+
+    Returns
+    -------
+    sympy.Expr
+        Pruned expression.
+    """
+    expr = sp.sympify(expr)
+
+    # atoms (symbols, numbers)
+    if expr.is_Atom:
+        return expr
+
+    # ---------- sums ----------
+    if expr.is_Add:
+        # Expand only this additive level so hidden terms become visible
+        expr_exp = sp.expand(expr)
+
+        kept = []
+        for term in expr_exp.as_ordered_terms():
+            t = prune_small_coeff_terms(term, decimals)
+            if t == 0:
+                continue
+
+            c, rest = t.as_coeff_Mul()
+            if c.is_number:
+                try:
+                    c_round = round(float(sp.N(c)), decimals)
+                    if c_round == 0.0:
+                        continue
+                    t = sp.Float(c_round) * rest
+                except Exception:
+                    pass
+
+            kept.append(t)
+
+        return sp.Add(*kept) if kept else sp.Integer(0)
+
+    # ---------- products ----------
+    if expr.is_Mul:
+        factors = [prune_small_coeff_terms(a, decimals) for a in expr.args]
+        if any(f == 0 for f in factors):
+            return sp.Integer(0)
+
+        new_expr = sp.Mul(*factors)
+
+        c, rest = new_expr.as_coeff_Mul()
+        if c.is_number:
+            try:
+                c_round = round(float(sp.N(c)), decimals)
+                if c_round == 0.0:
+                    return sp.Integer(0)
+                return sp.Float(c_round) * rest
+            except Exception:
+                return new_expr
+
+        return new_expr
+
+    # ---------- powers ----------
+    if expr.is_Pow:
+        base = prune_small_coeff_terms(expr.base, decimals)
+        exp  = prune_small_coeff_terms(expr.exp, decimals)
+        return sp.Pow(base, exp)
+
+    # ---------- generic functions (sqrt, sin, log, etc.) ----------
+    if expr.args:
+        new_args = [prune_small_coeff_terms(a, decimals) for a in expr.args]
+        try:
+            return expr.func(*new_args)
+        except Exception:
+            return expr
+
+    return expr
