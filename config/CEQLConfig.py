@@ -41,7 +41,10 @@ class ModelTrainingConfig:
     imag_plateau_min_epoch_in_phase = 0     # additional warmup in each phase before plateau logic starts
 
     # when plateau triggers: reinit Im(weights) and restart anneal cycle
-    imag_reinit_scale = 1.0  # Im ~ U(-scale/2, scale/2) for active weights
+    # imag_reinit_scale = 1.0  # Im ~ U(-scale/2, scale/2) for active weights
+    imag_reinit_gain = 10.0
+    imag_reinit_scale_min = 1e-4
+    imag_reinit_scale_max = 1.0
 
     # ==========================================================
     # Sparsification (Phase 2 only): L1L0 on REAL(weights) only
@@ -97,8 +100,8 @@ class NomtoConfig:
             # {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
             # {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
             # {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-            # {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            # {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
             {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
             {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
             # {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},

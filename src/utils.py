@@ -148,6 +148,29 @@ def _anneal_coeff(
     raise ValueError(f"Unknown anneal mode: {mode!r}")
 
 
+def imag_reinit_scale_from_loss(
+    data_loss: float,
+    *,
+    gain: float = 10.0,
+    sigma_min: float,
+    sigma_max: float,
+    eps: float = 1e-16,
+) -> float:
+    """
+    sigma = clip(gain * sqrt(data_loss), sigma_min, sigma_max)
+
+    Examples (gain=10):
+      L=1e-2 -> sigma=1
+      L=1e-4 -> sigma=0.1
+    """
+    L = max(float(data_loss), eps)
+    sigma = gain * (L ** 0.5)
+    if sigma < sigma_min:
+        sigma = sigma_min
+    if sigma > sigma_max:
+        sigma = sigma_max
+    return sigma
+
 @torch.no_grad()
 def reinit_imag_weights_(model: torch.nn.Module, scale: float) -> None:
     """Reinitialize Im(weights) ~ U(-scale/2, scale/2) for ACTIVE (mask==1) entries only."""
@@ -296,7 +319,7 @@ def train(
     # Single optimizer + scheduler for all phases.
     # Scheduler is reset ONLY when we reinit imaginary weights.
     # ----------------------------------------------------------
-    opt = torch.optim.Adam(model.parameters(), lr=cfg.lr)
+    opt = optimizer #torch.optim.Adam(model.parameters(), lr=cfg.lr)
     sch = None # _make_scheduler(opt)
 
     def _run_phase(
@@ -403,7 +426,15 @@ def train(
                         )
                         if no_improve >= cfg.imag_plateau_patience:
                             # 1) reinit imaginary weights
-                            reinit_imag_weights_(model, cfg.imag_reinit_scale)
+                            # reinit_imag_weights_(model, cfg.imag_reinit_scale)
+                            scale = imag_reinit_scale_from_loss(
+                                avg_data,
+                                gain=cfg.imag_reinit_gain,
+                                sigma_min=cfg.imag_reinit_scale_min,
+                                sigma_max=cfg.imag_reinit_scale_max,
+                            )
+                            reinit_imag_weights_(model, scale)
+                            reinit_imag_weights_(model, scale)
 
                             # 2) reset optimizer LR to initial value
                             for g in opt.param_groups:
