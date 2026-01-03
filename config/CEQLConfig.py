@@ -17,8 +17,8 @@ class ModelTrainingConfig:
     # -------------------------
     # Phase control
     # -------------------------
-    phase1_epochs = 30000
-    phase2_epochs = 20000
+    phase1_epochs = 20000
+    phase2_epochs = 30000
     phase3_epochs = 10000
     print_every = 100
 
@@ -71,9 +71,9 @@ class ModelTrainingConfig:
     pruning_enabled_phase2 = True
     pruning_enabled_phase3 = False
 
-    pruning_start_epoch = 2000
+    pruning_start_epoch = 5000
     pruning_period = 500
-    pruning_threshold = 1e-2
+    pruning_threshold = 5e-2
 
     # ==========================================================
     # Phase 3: keep imag penalty "big" (fixed), no anneal/reset, no sparsity/pruning
@@ -92,43 +92,58 @@ class NomtoConfig:
     no_params_list = [
         [
             {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            # {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            # {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            # {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-            # {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-            # {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
-            # {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-            # {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-            # {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
             {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
             {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            # {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-            # {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-            # {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-            # {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
-            # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
+            {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
+            {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
+            {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
+            {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
+            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
             # {'library_function': 'pow',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 5.0},
         ],
-        # [
-        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-        #     {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-        #     {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-        #     {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
-        #     {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
-        #     {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
-        #     {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-6},
-        #     {'library_function': 'pow',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 5.0},
-        # ],
+        [
+            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
+            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
+            {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
+            {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
+            {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
+            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
+            # {'library_function': 'pow',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 5.0},
+        ],
+        [
+            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
+            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
+            {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
+            {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
+            {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
+            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
+            # {'library_function': 'pow',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 5.0},
+        ],
     ]
 
     n_input_fields = 2
@@ -144,9 +159,10 @@ class NomtoConfig:
         'exp':    lambda x: sp.exp(x),
         'sin':    lambda x: sp.sin(x),
         'cos':    lambda x: sp.cos(x),
+        'tan':    lambda x: sp.tan(x),
+        'tanh':   lambda x: sp.tanh(x),
         'log':    lambda x: sp.log(x),
         'mul':    lambda a, b: a * b,
         'div':    lambda a, b: a / b,
         'pow':    lambda a, b: a**b,
-        
     }

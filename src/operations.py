@@ -98,8 +98,18 @@ def log_operation(x: torch.Tensor, stair_step_size: float) -> torch.Tensor:
     return out.unsqueeze(-1)
 
 
+# def exponent_operation(x: torch.Tensor) -> torch.Tensor:
+#     return torch.exp(x).unsqueeze(-1)
 def exponent_operation(x: torch.Tensor) -> torch.Tensor:
-    return torch.exp(x).unsqueeze(-1)
+    z = x
+    if torch.is_complex(z):
+        u = torch.clamp(z.real, -40.0, 40.0)  # 40 is safe for float32
+        z = torch.complex(u, z.imag)
+    else:
+        z = torch.clamp(z, -40.0, 40.0)
+    out = torch.exp(z)
+    # out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+    return out.unsqueeze(-1)
 
 
 def sin_operation(x: torch.Tensor, damp_gamma: float, damp_p: float) -> torch.Tensor:
@@ -120,6 +130,72 @@ def cos_operation(x: torch.Tensor, damp_gamma: float, damp_p: float) -> torch.Te
     y_real = torch.cos(u) * damp
     y = torch.complex(y_real, torch.zeros_like(y_real))
     return y.unsqueeze(-1)
+
+def tan_operation(x: torch.Tensor, stair_step_size: float) -> torch.Tensor:
+    z = x
+
+    # Prevent cosh(Im(z)) overflow inside sin/cos for complex inputs
+    if torch.is_complex(z):
+        v = torch.clamp(z.imag, -40.0, 40.0)   # 40 is safe-ish for float32
+        z = torch.complex(z.real, v)
+
+    den = torch.cos(z)
+    den_mag = den.abs() if torch.is_complex(den) else torch.abs(den)
+
+    stair = torch.as_tensor(stair_step_size, device=z.device, dtype=den_mag.dtype)
+    mask = (den_mag > (stair / 2.0)) & torch.isfinite(den_mag)
+
+    out = torch.zeros_like(z)
+    if mask.any():
+        num = torch.sin(z[mask])
+        den_m = den[mask]
+        out[mask] = num / den_m
+
+    finite = torch.isfinite(out)
+    if not finite.all():
+        out = out.clone()
+        out[~finite] = 0.0
+
+    return out.unsqueeze(-1)
+
+# def tanh_operation(x: torch.Tensor) -> torch.Tensor:
+#     z = x
+#     out = torch.tanh(z)
+
+#     # safety: remove NaN / Inf (should be rare, but keep consistent)
+#     finite = torch.isfinite(out)
+#     if not finite.all():
+#         out = out.clone()
+#         out[~finite] = 0.0
+
+#     return out.unsqueeze(-1)
+def tanh_operation(x: torch.Tensor, stair_step_size: float) -> torch.Tensor:
+    z = x
+
+    # Prevent cosh(Re(z)) overflow
+    if torch.is_complex(z):
+        u = torch.clamp(z.real, -40.0, 40.0)
+        z = torch.complex(u, z.imag)
+    else:
+        z = torch.clamp(z, -40.0, 40.0)
+
+    # Gate near poles: tanh(z) has poles where cosh(z)=0
+    den = torch.cosh(z)
+    den_mag = den.abs() if torch.is_complex(den) else torch.abs(den)
+
+    stair = torch.as_tensor(stair_step_size, device=z.device, dtype=den_mag.dtype)
+    mask = (den_mag > (stair / 2.0)) & torch.isfinite(den_mag)
+
+    out = torch.zeros_like(z)
+    if mask.any():
+        out[mask] = torch.tanh(z[mask])  # stable
+
+    finite = torch.isfinite(out)
+    if not finite.all():
+        out = out.clone()
+        out[~finite] = 0.0
+
+    return out.unsqueeze(-1)
 
 
 # ======================
@@ -317,6 +393,10 @@ def load_models(cfg, layer_idx: int):
                 model = UnarySurrogate(sin_operation, cfg, op, optype, damp_gamma=params["damp_gamma"], damp_p=params["damp_p"])
             elif op == "cos":
                 model = UnarySurrogate(cos_operation, cfg, op, optype, damp_gamma=params["damp_gamma"], damp_p=params["damp_p"])
+            elif op == "tan":
+                model = UnarySurrogate(tan_operation, cfg, op, optype, stair_step_size=stair_step_size)
+            elif op == "tanh":
+                model = UnarySurrogate(tanh_operation, cfg, op, optype, stair_step_size=stair_step_size)
             else:
                 raise ValueError(f"Unknown exact unary operation '{op}'")
             unary_nos.append(model)
@@ -327,7 +407,7 @@ def load_models(cfg, layer_idx: int):
             elif op == "div":
                 # model = BinarySurrogate(div_operation, cfg, op, optype)
                 model = BinarySurrogate(div_operation, cfg, op, optype, stair_step_size=stair_step_size)
-            elif op in ("pow"):
+            elif op == "pow":
                 # model = BinarySurrogate(power_operation, cfg, op, optype)
                 model = BinarySurrogate(power_operation, cfg, op, optype, stair_step_size=stair_step_size)
             else:
