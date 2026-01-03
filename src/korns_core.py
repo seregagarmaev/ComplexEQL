@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, fields
 from typing import Dict, Any, List, Optional, Protocol, Tuple
 
 import numpy as np
@@ -95,14 +95,84 @@ def _get_algo_seed(algo_name: str) -> int:
     return int(np.uint32(zlib_crc32(algo_name.encode("utf-8"))))
 
 
+# def run_benchmark(
+#     datasets: Dict[str, DatasetRecord],
+#     algorithms: List[SymbolicRegressor],
+#     config: RunConfig,
+#     n_runs: int,
+#     feature_names: List[str],
+# ) -> List[BenchmarkRow]:
+#     rows: List[BenchmarkRow] = []
+
+#     for pid, rec in sorted(datasets.items(), key=lambda kv: int(kv[0][1:])):
+#         split_seed = config.split_seed + config.per_problem_seed_offset + int(pid[1:])
+#         X_train, X_test, y_train, y_test = train_test_split(
+#             rec.X, rec.y, test_size=config.test_size, seed=split_seed
+#         )
+
+#         print("=" * 50)
+#         print(f"[PROBLEM] {pid}")
+#         print(f"[GT] {rec.expr_gt}")
+
+#         for algo in algorithms:
+#             algo_seed = _get_algo_seed(algo.name)
+#             print("=" * 50)
+#             print(f"[ALGO] {algo.name}")
+
+#             for run_id in range(n_runs):
+#                 run_seed = (
+#                     config.split_seed
+#                     + config.per_problem_seed_offset * int(pid[1:])
+#                     + config.algo_seed_offset * algo_seed
+#                     + config.run_seed_offset * run_id
+#                 )
+#                 print(f"[RUN START] run_id={run_id} seed={run_seed}")
+
+#                 fit_res = algo.fit_predict(X_train, y_train, X_test)
+#                 m: Metrics = compute_metrics(
+#                     y_true=y_test,
+#                     y_pred=fit_res.y_pred_test,
+#                     expr_gt=rec.expr_gt,
+#                     expr_pred=fit_res.expr,
+#                     feature_names=feature_names,
+#                 )
+
+#                 expr_pred = str(fit_res.expr) if fit_res.expr is not None else ""
+#                 print(f"[PRED] {expr_pred}")
+
+#                 extra = dict(fit_res.metadata) if fit_res.metadata else {}
+#                 extra["run_seed"] = int(run_seed)
+
+#                 rows.append(
+#                     BenchmarkRow(
+#                         pid=pid,
+#                         algo=algo.name,
+#                         run_id=run_id,
+#                         nlse=m.nlse,
+#                         term_precision=m.term_precision,
+#                         term_recall=m.term_recall,
+#                         term_f1=m.term_f1,
+#                         expr_str=expr_pred,
+#                         expr_gt_str=str(rec.expr_gt),
+#                         extra=extra,
+#                     )
+#                 )
+
+#     return rows
+
+
 def run_benchmark(
     datasets: Dict[str, DatasetRecord],
     algorithms: List[SymbolicRegressor],
     config: RunConfig,
     n_runs: int,
     feature_names: List[str],
+    results_csv_path: Optional[str] = None,
 ) -> List[BenchmarkRow]:
     rows: List[BenchmarkRow] = []
+
+    if results_csv_path is not None:
+        init_results_csv(results_csv_path, BenchmarkRow)
 
     for pid, rec in sorted(datasets.items(), key=lambda kv: int(kv[0][1:])):
         split_seed = config.split_seed + config.per_problem_seed_offset + int(pid[1:])
@@ -126,6 +196,7 @@ def run_benchmark(
                     + config.algo_seed_offset * algo_seed
                     + config.run_seed_offset * run_id
                 )
+
                 print(f"[RUN START] run_id={run_id} seed={run_seed}")
 
                 fit_res = algo.fit_predict(X_train, y_train, X_test)
@@ -143,32 +214,53 @@ def run_benchmark(
                 extra = dict(fit_res.metadata) if fit_res.metadata else {}
                 extra["run_seed"] = int(run_seed)
 
-                rows.append(
-                    BenchmarkRow(
-                        pid=pid,
-                        algo=algo.name,
-                        run_id=run_id,
-                        nlse=m.nlse,
-                        term_precision=m.term_precision,
-                        term_recall=m.term_recall,
-                        term_f1=m.term_f1,
-                        expr_str=expr_pred,
-                        expr_gt_str=str(rec.expr_gt),
-                        extra=extra,
-                    )
+                row = BenchmarkRow(
+                    pid=pid,
+                    algo=algo.name,
+                    run_id=run_id,
+                    nlse=m.nlse,
+                    term_precision=m.term_precision,
+                    term_recall=m.term_recall,
+                    term_f1=m.term_f1,
+                    expr_str=expr_pred,
+                    expr_gt_str=str(rec.expr_gt),
+                    extra=extra,
                 )
+
+                rows.append(row)
+
+                if results_csv_path is not None:
+                    append_results_csv_row(results_csv_path, row)
 
     return rows
 
+# def save_results_csv(rows: List[BenchmarkRow], path: str) -> None:
+#     import csv
+#     fieldnames = list(asdict(rows[0]).keys()) if rows else []
+#     with open(path, "w", newline="") as f:
+#         w = csv.DictWriter(f, fieldnames=fieldnames)
+#         w.writeheader()
+#         for r in rows:
+#             d = asdict(r)
+#             if d.get("extra") is not None:
+#                 d["extra"] = str(d["extra"])
+#             w.writerow(d)
 
-def save_results_csv(rows: List[BenchmarkRow], path: str) -> None:
+
+def init_results_csv(path: str, row_type) -> None:
     import csv
-    fieldnames = list(asdict(rows[0]).keys()) if rows else []
+    fieldnames = [f.name for f in fields(row_type)]
     with open(path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
-        for r in rows:
-            d = asdict(r)
-            if d.get("extra") is not None:
-                d["extra"] = str(d["extra"])
-            w.writerow(d)
+
+
+def append_results_csv_row(path: str, row) -> None:
+    import csv
+    d = asdict(row)
+    if d.get("extra") is not None:
+        d["extra"] = str(d["extra"])
+    fieldnames = list(d.keys())
+    with open(path, "a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writerow(d)
