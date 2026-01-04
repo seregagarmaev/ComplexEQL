@@ -17,9 +17,9 @@ class ModelTrainingConfig:
     # -------------------------
     # Phase control
     # -------------------------
-    phase1_epochs = 20000
-    phase2_epochs = 30000
-    phase3_epochs = 10000
+    phase1_epochs = 10000
+    phase2_epochs = 10000
+    phase3_epochs = 5000
     print_every = 100
 
     # ==========================================================
@@ -29,22 +29,22 @@ class ModelTrainingConfig:
     imag_weights_penalty_enabled_phase2 = True
     imag_weights_penalty_enabled_phase3 = True
 
-    imag_anneal_epochs = 1000
-    imag_w_coeff_start = 1e-6
-    imag_w_coeff_end = 1e3
+    imag_anneal_epochs = 2000
+    imag_w_coeff_start = 1e-4
+    imag_w_coeff_end = 1e-4
     imag_anneal_mode = "exp"  # "linear" or "exp"
 
     # plateau logic: after anneal in each cycle, monitor data loss
     imag_plateau_patience = 500
-    imag_plateau_rel_tol = 1e-4
+    imag_plateau_rel_tol = 1e-4 # 1e-6
     imag_plateau_check_after_anneal = True  # start plateau counting only after anneal is finished in the cycle
-    imag_plateau_min_epoch_in_phase = 0     # additional warmup in each phase before plateau logic starts
+    imag_plateau_min_epoch_in_phase = 30000     # additional warmup in each phase before plateau logic starts
 
     # when plateau triggers: reinit Im(weights) and restart anneal cycle
     # imag_reinit_scale = 1.0  # Im ~ U(-scale/2, scale/2) for active weights
-    imag_reinit_gain = 10.0
+    imag_reinit_gain = 1.0
     imag_reinit_scale_min = 1e-4
-    imag_reinit_scale_max = 1.0
+    imag_reinit_scale_max = 0.1
 
     # ==========================================================
     # Sparsification (Phase 2 only): L1L0 on REAL(weights) only
@@ -53,8 +53,9 @@ class ModelTrainingConfig:
     l1l0_enabled_phase2 = True
     l1l0_enabled_phase3 = False
 
-    l1l0_on_real_only = True
-    l1l0_real_reg_coeff_phase2 = 1e-2
+    l1l0_on_real_only = False #True
+    l1l0_real_reg_coeff_phase1 = 1e-3
+    l1l0_real_reg_coeff_phase2 = 1e3
 
     # L1L0 schedule parameters (used when enabled)
     alpha_start = 1e-1
@@ -71,14 +72,14 @@ class ModelTrainingConfig:
     pruning_enabled_phase2 = True
     pruning_enabled_phase3 = False
 
-    pruning_start_epoch = 5000
-    pruning_period = 500
-    pruning_threshold = 5e-2
+    pruning_start_epoch = 2000
+    pruning_period = 1000
+    pruning_threshold = 1e-2
 
     # ==========================================================
     # Phase 3: keep imag penalty "big" (fixed), no anneal/reset, no sparsity/pruning
     # ==========================================================
-    imag_w_coeff_phase3 = 1e10 #imag_w_coeff_end
+    imag_w_coeff_phase3 = 1e3 #imag_w_coeff_end
 
     # division normalization
     normalize_divisions = True
@@ -93,56 +94,62 @@ class NomtoConfig:
         [
             {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
+            # {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
             {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
             {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
             {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
             {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
             {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
             {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
             {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
-            # {'library_function': 'pow',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 5.0},
         ],
         [
             {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
+            # {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
             {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
             {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
             {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
             {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
             {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
             {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
             {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
-            # {'library_function': 'pow',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 5.0},
         ],
         [
             {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
+            # {'library_function': 'cube',   'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
             {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
             {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
             {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
             {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
             {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
             {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
             {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
             {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
-            # {'library_function': 'pow',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 5.0},
         ],
     ]
 

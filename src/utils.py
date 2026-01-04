@@ -229,11 +229,18 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
         pred = model(X)
 
-        pred_real = pred.real
-        limit = 1e10
-        pred_real = torch.clamp(pred_real, -limit, limit)
+        # pred_real = pred.real
+        # limit = 1e30
+        # pred_real = torch.clamp(pred_real, -limit, limit)
 
-        data_loss = loss_fn(pred_real, y)
+        # data_loss = loss_fn(pred.real, y)
+        limit = 1e15
+        pred = torch.complex(
+            torch.clamp(pred.real, -limit, limit),
+            torch.clamp(pred.imag, -limit, limit),
+        )
+
+        data_loss = loss_fn(pred, y)
 
         # ----------------- L1L0 sparsity -----------------
         if sparsity_enabled and l1l0_coeff > 0.0:
@@ -260,7 +267,7 @@ def train_one_epoch(
         loss = data_loss + reg_loss
 
         loss.backward()
-        model.sanitize_gradients(max_grad=1e3)
+        model.sanitize_gradients(max_grad=1e8)
         optimizer.step()
 
         bs = X.size(0)
@@ -474,7 +481,7 @@ def train(
         "Phase 1",
         cfg.phase1_epochs,
         l1l0_enabled=cfg.l1l0_enabled_phase1,
-        l1l0_coeff=0.0,
+        l1l0_coeff=cfg.l1l0_real_reg_coeff_phase1,
         l1l0_use_real_only=cfg.l1l0_on_real_only,
         pruning_enabled=cfg.pruning_enabled_phase1,
         imag_enabled=cfg.imag_weights_penalty_enabled_phase1,

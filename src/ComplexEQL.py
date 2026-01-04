@@ -91,81 +91,15 @@ class SymbolicLayer(nn.Module):
                 p.requires_grad = False
 
     # # real only:
-    # def get_symbolic_output(
-    #     self,
-    #     symbolic_inputs: List[sympy.Expr],
-    #     rounding_decimals: int = 2,
-    # ) -> List[sympy.Expr]:
-    #     """
-    #     Symbolic mirror of forward() using ONLY REAL PART of complex weights.
-    #     Returns list of sympy expressions, one per operator in this layer
-    #     (unary first, then binary).
-    #     """
-    #     outs: List[sympy.Expr] = []
-
-    #     # ---------- UNARY OPS ----------
-    #     for op_idx in range(self.n_unary_nos):
-    #         op_name = self.function_names[op_idx]
-    #         mixed = sympy.Integer(0)
-
-    #         for j in range(len(symbolic_inputs)):
-    #             w = self.weights[j, op_idx].detach()
-    #             coef_real = sympy.Float(float(w.real.cpu().item()))
-    #             mixed += _threshold_multiply(coef_real, symbolic_inputs[j], rounding_decimals)
-
-    #         if op_name == "dydx":
-    #             op = self.functions_dict[op_name]
-    #             symbolic_out = op(mixed, self.functions_dict["x"])
-    #         else:
-    #             op = self.functions_dict[op_name]
-    #             symbolic_out = op(mixed)
-
-    #         if isinstance(symbolic_out, int) or getattr(symbolic_out, "is_infinite", False):
-    #             outs.append(sympy.Integer(0))
-    #         else:
-    #             outs.append(sympy.sympify(symbolic_out))
-
-    #     # ---------- BINARY OPS ----------
-    #     for i in range(self.n_binary_nos):
-    #         op_name = self.function_names[self.n_unary_nos + i]
-    #         op = self.functions_dict[op_name]
-
-    #         a = sympy.Integer(0)
-    #         b = sympy.Integer(0)
-    #         a_col = self.n_unary_nos + 2 * i
-    #         b_col = a_col + 1
-
-    #         for j in range(len(symbolic_inputs)):
-    #             w_a = self.weights[j, a_col].detach()
-    #             w_b = self.weights[j, b_col].detach()
-
-    #             coef_a_real = sympy.Float(float(w_a.real.cpu().item()))
-    #             coef_b_real = sympy.Float(float(w_b.real.cpu().item()))
-
-    #             a += _threshold_multiply(coef_a_real, symbolic_inputs[j], rounding_decimals)
-    #             b += _threshold_multiply(coef_b_real, symbolic_inputs[j], rounding_decimals)
-
-    #         if op_name == "div":
-    #             try:
-    #                 outs.append(sympy.cancel(a / b))
-    #             except Exception:
-    #                 outs.append(sympy.sympify(op(a, b)))
-    #         else:
-    #             outs.append(sympy.sympify(op(a, b)))
-
-    #     return outs
-
-    # real + imag weights:
     def get_symbolic_output(
         self,
         symbolic_inputs: List[sympy.Expr],
         rounding_decimals: int = 2,
     ) -> List[sympy.Expr]:
         """
-        Symbolic mirror of forward():
-          - mix inputs with (rounded) REAL and IMAG parts of complex weights
-          - apply each operator symbolically via functions_dict
-        Returns list of sympy expressions, one per operator in this layer (unary first, then binary).
+        Symbolic mirror of forward() using ONLY REAL PART of complex weights.
+        Returns list of sympy expressions, one per operator in this layer
+        (unary first, then binary).
         """
         outs: List[sympy.Expr] = []
 
@@ -176,16 +110,8 @@ class SymbolicLayer(nn.Module):
 
             for j in range(len(symbolic_inputs)):
                 w = self.weights[j, op_idx].detach()
-                # real part
                 coef_real = sympy.Float(float(w.real.cpu().item()))
-                mixed += _threshold_multiply(
-                    coef_real, symbolic_inputs[j], rounding_decimals
-                )
-                # imaginary part
-                coef_imag = sympy.Float(float(w.imag.cpu().item()))
-                mixed += sympy.I * _threshold_multiply(
-                    coef_imag, symbolic_inputs[j], rounding_decimals
-                )
+                mixed += _threshold_multiply(coef_real, symbolic_inputs[j], rounding_decimals)
 
             if op_name == "dydx":
                 op = self.functions_dict[op_name]
@@ -213,25 +139,11 @@ class SymbolicLayer(nn.Module):
                 w_a = self.weights[j, a_col].detach()
                 w_b = self.weights[j, b_col].detach()
 
-                # a: real + i imag
                 coef_a_real = sympy.Float(float(w_a.real.cpu().item()))
-                coef_a_imag = sympy.Float(float(w_a.imag.cpu().item()))
-                a += _threshold_multiply(
-                    coef_a_real, symbolic_inputs[j], rounding_decimals
-                )
-                a += sympy.I * _threshold_multiply(
-                    coef_a_imag, symbolic_inputs[j], rounding_decimals
-                )
-
-                # b: real + i imag
                 coef_b_real = sympy.Float(float(w_b.real.cpu().item()))
-                coef_b_imag = sympy.Float(float(w_b.imag.cpu().item()))
-                b += _threshold_multiply(
-                    coef_b_real, symbolic_inputs[j], rounding_decimals
-                )
-                b += sympy.I * _threshold_multiply(
-                    coef_b_imag, symbolic_inputs[j], rounding_decimals
-                )
+
+                a += _threshold_multiply(coef_a_real, symbolic_inputs[j], rounding_decimals)
+                b += _threshold_multiply(coef_b_real, symbolic_inputs[j], rounding_decimals)
 
             if op_name == "div":
                 try:
@@ -242,6 +154,94 @@ class SymbolicLayer(nn.Module):
                 outs.append(sympy.sympify(op(a, b)))
 
         return outs
+
+    # # real + imag weights:
+    # def get_symbolic_output(
+    #     self,
+    #     symbolic_inputs: List[sympy.Expr],
+    #     rounding_decimals: int = 2,
+    # ) -> List[sympy.Expr]:
+    #     """
+    #     Symbolic mirror of forward():
+    #       - mix inputs with (rounded) REAL and IMAG parts of complex weights
+    #       - apply each operator symbolically via functions_dict
+    #     Returns list of sympy expressions, one per operator in this layer (unary first, then binary).
+    #     """
+    #     outs: List[sympy.Expr] = []
+
+    #     # ---------- UNARY OPS ----------
+    #     for op_idx in range(self.n_unary_nos):
+    #         op_name = self.function_names[op_idx]
+    #         mixed = sympy.Integer(0)
+
+    #         for j in range(len(symbolic_inputs)):
+    #             w = self.weights[j, op_idx].detach()
+    #             # real part
+    #             coef_real = sympy.Float(float(w.real.cpu().item()))
+    #             mixed += _threshold_multiply(
+    #                 coef_real, symbolic_inputs[j], rounding_decimals
+    #             )
+    #             # imaginary part
+    #             coef_imag = sympy.Float(float(w.imag.cpu().item()))
+    #             mixed += sympy.I * _threshold_multiply(
+    #                 coef_imag, symbolic_inputs[j], rounding_decimals
+    #             )
+
+    #         if op_name == "dydx":
+    #             op = self.functions_dict[op_name]
+    #             symbolic_out = op(mixed, self.functions_dict["x"])
+    #         else:
+    #             op = self.functions_dict[op_name]
+    #             symbolic_out = op(mixed)
+
+    #         if isinstance(symbolic_out, int) or getattr(symbolic_out, "is_infinite", False):
+    #             outs.append(sympy.Integer(0))
+    #         else:
+    #             outs.append(sympy.sympify(symbolic_out))
+
+    #     # ---------- BINARY OPS ----------
+    #     for i in range(self.n_binary_nos):
+    #         op_name = self.function_names[self.n_unary_nos + i]
+    #         op = self.functions_dict[op_name]
+
+    #         a = sympy.Integer(0)
+    #         b = sympy.Integer(0)
+    #         a_col = self.n_unary_nos + 2 * i
+    #         b_col = a_col + 1
+
+    #         for j in range(len(symbolic_inputs)):
+    #             w_a = self.weights[j, a_col].detach()
+    #             w_b = self.weights[j, b_col].detach()
+
+    #             # a: real + i imag
+    #             coef_a_real = sympy.Float(float(w_a.real.cpu().item()))
+    #             coef_a_imag = sympy.Float(float(w_a.imag.cpu().item()))
+    #             a += _threshold_multiply(
+    #                 coef_a_real, symbolic_inputs[j], rounding_decimals
+    #             )
+    #             a += sympy.I * _threshold_multiply(
+    #                 coef_a_imag, symbolic_inputs[j], rounding_decimals
+    #             )
+
+    #             # b: real + i imag
+    #             coef_b_real = sympy.Float(float(w_b.real.cpu().item()))
+    #             coef_b_imag = sympy.Float(float(w_b.imag.cpu().item()))
+    #             b += _threshold_multiply(
+    #                 coef_b_real, symbolic_inputs[j], rounding_decimals
+    #             )
+    #             b += sympy.I * _threshold_multiply(
+    #                 coef_b_imag, symbolic_inputs[j], rounding_decimals
+    #             )
+
+    #         if op_name == "div":
+    #             try:
+    #                 outs.append(sympy.cancel(a / b))
+    #             except Exception:
+    #                 outs.append(sympy.sympify(op(a, b)))
+    #         else:
+    #             outs.append(sympy.sympify(op(a, b)))
+
+    #     return outs
 
     @torch.no_grad()
     def normalize_division_mixing_(self, eps: float = 1e-12) -> int:
@@ -443,50 +443,50 @@ class AssemblyLayer(nn.Module):
 
         self.functions_dict = cfg.functions_dict
 
-    # # real only:
-    # def get_symbolic_output(
-    #     self,
-    #     symbolic_inputs: List[sympy.Expr],
-    #     rounding_decimals: int = 2,
-    # ) -> sympy.Expr:
-    #     """
-    #     Sum_i Re(w_i) * symbolic_inputs[i] with thresholded rounding
-    #     to keep expressions compact.
-    #     """
-    #     out: sympy.Expr = sympy.Integer(0)
-    #     for i in range(len(symbolic_inputs)):
-    #         w = self.weights[i, 0].detach()
-    #         coef_real = sympy.Float(float(w.real.cpu().item()))
-    #         out += _threshold_multiply(coef_real, symbolic_inputs[i], rounding_decimals)
-    #     return sympy.sympify(out)
-
-    # real + imag weights:
+    # real only:
     def get_symbolic_output(
         self,
         symbolic_inputs: List[sympy.Expr],
         rounding_decimals: int = 2,
     ) -> sympy.Expr:
         """
-        Sum_i (Re(w_i) + i Im(w_i)) * symbolic_inputs[i] with thresholded rounding
+        Sum_i Re(w_i) * symbolic_inputs[i] with thresholded rounding
         to keep expressions compact.
         """
         out: sympy.Expr = sympy.Integer(0)
         for i in range(len(symbolic_inputs)):
             w = self.weights[i, 0].detach()
-
-            # real part
             coef_real = sympy.Float(float(w.real.cpu().item()))
-            out += _threshold_multiply(
-                coef_real, symbolic_inputs[i], rounding_decimals
-            )
-
-            # imaginary part
-            coef_imag = sympy.Float(float(w.imag.cpu().item()))
-            out += sympy.I * _threshold_multiply(
-                coef_imag, symbolic_inputs[i], rounding_decimals
-            )
-
+            out += _threshold_multiply(coef_real, symbolic_inputs[i], rounding_decimals)
         return sympy.sympify(out)
+
+    # # real + imag weights:
+    # def get_symbolic_output(
+    #     self,
+    #     symbolic_inputs: List[sympy.Expr],
+    #     rounding_decimals: int = 2,
+    # ) -> sympy.Expr:
+    #     """
+    #     Sum_i (Re(w_i) + i Im(w_i)) * symbolic_inputs[i] with thresholded rounding
+    #     to keep expressions compact.
+    #     """
+    #     out: sympy.Expr = sympy.Integer(0)
+    #     for i in range(len(symbolic_inputs)):
+    #         w = self.weights[i, 0].detach()
+
+    #         # real part
+    #         coef_real = sympy.Float(float(w.real.cpu().item()))
+    #         out += _threshold_multiply(
+    #             coef_real, symbolic_inputs[i], rounding_decimals
+    #         )
+
+    #         # imaginary part
+    #         coef_imag = sympy.Float(float(w.imag.cpu().item()))
+    #         out += sympy.I * _threshold_multiply(
+    #             coef_imag, symbolic_inputs[i], rounding_decimals
+    #         )
+
+    #     return sympy.sympify(out)
 
     def prune_by_threshold(self, threshold: float) -> int:
         with torch.no_grad():

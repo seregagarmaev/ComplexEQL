@@ -4,17 +4,8 @@ from typing import List
 import torch
 import torch.nn as nn
 
-# ============================================================
-# Global safety + damping parameters
-# ============================================================
-
 # Global clamp for all operator outputs
 CLAMP_VAL = 1e15
-
-# Damping: damp(|Im(x)|) = exp(-DAMP_GAMMA * (|Im(x)| + eps)^DAMP_P)
-DAMP_GAMMA = 10.0#10.0    10.0 for sin/cos
-DAMP_P = 1.0#3.0 # 1.0 for sin/cos
-_DAMP_EPS = 1e-12
 
 
 def nan_to_num_complex(
@@ -25,15 +16,13 @@ def nan_to_num_complex(
 ) -> torch.Tensor:
     if torch.is_complex(x):
         return torch.complex(
-            torch.nan_to_num(x.real, nan=nan, posinf=0.0, neginf=0.0),
-            torch.nan_to_num(x.imag, nan=nan, posinf=0.0, neginf=0.0),
+            torch.nan_to_num(x.real, nan=nan, posinf=posinf, neginf=neginf),
+            torch.nan_to_num(x.imag, nan=nan, posinf=posinf, neginf=neginf),
         )
-    return torch.nan_to_num(x, nan=nan, posinf=0.0, neginf=0.0)
+    return torch.nan_to_num(x, nan=nan, posinf=posinf, neginf=neginf)
 
 
-def clamp_complex(
-    x: torch.Tensor, min_val: float = -CLAMP_VAL, max_val: float = CLAMP_VAL
-) -> torch.Tensor:
+def clamp_complex(x: torch.Tensor, min_val: float = -CLAMP_VAL, max_val: float = CLAMP_VAL) -> torch.Tensor:
     if torch.is_complex(x):
         xr = torch.clamp(x.real, min_val, max_val)
         xi = torch.clamp(x.imag, min_val, max_val)
@@ -42,22 +31,9 @@ def clamp_complex(
 
 
 def _sanitize_out(y: torch.Tensor) -> torch.Tensor:
-    y = nan_to_num_complex(y, nan=0.0, posinf=0.0, neginf=-0.0)
+    y = nan_to_num_complex(y, nan=0.0, posinf=CLAMP_VAL, neginf=-CLAMP_VAL)
     y = clamp_complex(y, -CLAMP_VAL, CLAMP_VAL)
     return y
-
-
-def _real_part(x: torch.Tensor) -> torch.Tensor:
-    return x.real if torch.is_complex(x) else x
-
-
-def _imag_part(x: torch.Tensor) -> torch.Tensor:
-    return x.imag if torch.is_complex(x) else torch.zeros_like(x)
-
-
-def _damp_from_imag(x: torch.Tensor) -> torch.Tensor:
-    v = _imag_part(x)
-    return torch.exp(-DAMP_GAMMA * torch.pow(v.abs() + _DAMP_EPS, DAMP_P))
 
 
 # ======================
@@ -65,86 +41,82 @@ def _damp_from_imag(x: torch.Tensor) -> torch.Tensor:
 # ======================
 
 def identity_operation(x: torch.Tensor) -> torch.Tensor:
-    # u = _real_part(x)
-    # y = torch.complex(u, torch.zeros_like(u))
-    return _sanitize_out(x).unsqueeze(-1)
+    y = x
+    y = _sanitize_out(y)
+    return y.unsqueeze(-1)
 
 
 def const_operation(x: torch.Tensor) -> torch.Tensor:
-    u = _real_part(x)
-    y = torch.complex(u * 0 + 1, torch.zeros_like(u))
-    return _sanitize_out(y).unsqueeze(-1)
-
+    y = x * 0 + 1
+    y = _sanitize_out(y)
+    return y.unsqueeze(-1)
 
 
 def square_operation(x: torch.Tensor) -> torch.Tensor:
-    u = _real_part(x)
-    damp = _damp_from_imag(x)
-    y_real = (u * u) * damp
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    return _sanitize_out(y).unsqueeze(-1)
+    y = x * x
+    y = _sanitize_out(y)
+    return y.unsqueeze(-1)
 
 
 def cube_operation(x: torch.Tensor) -> torch.Tensor:
-    u = _real_part(x)
-    damp = _damp_from_imag(x)
-    y_real = (u * u * u) * damp
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    return _sanitize_out(y).unsqueeze(-1)
+    y = x * x * x
+    y = _sanitize_out(y)
+    return y.unsqueeze(-1)
 
 
 def sqrt_operation(x: torch.Tensor) -> torch.Tensor:
-    # y_real = torch.sqrt(x).real
-    # y = torch.complex(y_real, torch.zeros_like(y_real))
     y = torch.sqrt(x)
-    return _sanitize_out(y).unsqueeze(-1)
+    y = _sanitize_out(y)
+    return y.unsqueeze(-1)
 
 
 def log_operation(x: torch.Tensor, stair_step_size: float) -> torch.Tensor:
-    # y_real = torch.log(x).real
-    # y = torch.complex(y_real, torch.zeros_like(y_real))
+    # stair_step_size kept for interface compatibility; unused
     y = torch.log(x)
-    return _sanitize_out(y).unsqueeze(-1)
+    y = _sanitize_out(y)
+    return y.unsqueeze(-1)
+
 
 def exponent_operation(x: torch.Tensor) -> torch.Tensor:
-    u = _real_part(x)
-    damp = _damp_from_imag(x)
-    y_real = torch.exp(u) * damp
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    return _sanitize_out(y).unsqueeze(-1)
+    y = torch.exp(x)
+    y = _sanitize_out(y)
+    return y.unsqueeze(-1)
 
 
 def sin_operation(x: torch.Tensor, damp_gamma: float, damp_p: float) -> torch.Tensor:
-    u = _real_part(x)
-    damp = _damp_from_imag(x)  # uses global DAMP_GAMMA / DAMP_P / _DAMP_EPS
+    u = x.real
+    v = x.imag
+    eps = 1e-12
+    damp = torch.exp(-damp_gamma * torch.pow(v.abs() + eps, damp_p))
     y_real = torch.sin(u) * damp
     y = torch.complex(y_real, torch.zeros_like(y_real))
-    return _sanitize_out(y).unsqueeze(-1)
+    y = _sanitize_out(y)
+    return y.unsqueeze(-1)
 
 
 def cos_operation(x: torch.Tensor, damp_gamma: float, damp_p: float) -> torch.Tensor:
-    u = _real_part(x)
-    damp = _damp_from_imag(x)  # uses global DAMP_GAMMA / DAMP_P / _DAMP_EPS
+    u = x.real
+    v = x.imag
+    eps = 1e-12
+    damp = torch.exp(-damp_gamma * torch.pow(v.abs() + eps, damp_p))
     y_real = torch.cos(u) * damp
     y = torch.complex(y_real, torch.zeros_like(y_real))
-    return _sanitize_out(y).unsqueeze(-1)
+    y = _sanitize_out(y)
+    return y.unsqueeze(-1)
 
 
 def tan_operation(x: torch.Tensor, stair_step_size: float) -> torch.Tensor:
-    y_real = torch.tan(x).real
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    return _sanitize_out(y).unsqueeze(-1)
-
-
-
+    # stair_step_size kept for interface compatibility; unused
+    y = torch.tan(x)
+    y = _sanitize_out(y)
+    return y.unsqueeze(-1)
 
 
 def tanh_operation(x: torch.Tensor, stair_step_size: float) -> torch.Tensor:
-    u = _real_part(x)
-    damp = _damp_from_imag(x)
-    y_real = torch.tanh(u) * damp
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    return _sanitize_out(y).unsqueeze(-1)
+    # stair_step_size kept for interface compatibility; unused
+    y = torch.tanh(x)
+    y = _sanitize_out(y)
+    return y.unsqueeze(-1)
 
 
 # ======================
@@ -152,25 +124,23 @@ def tanh_operation(x: torch.Tensor, stair_step_size: float) -> torch.Tensor:
 # ======================
 
 def multiplication_operation(x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
-    y_full = x1.real * x2.real
-    damp = _damp_from_imag(x1) * _damp_from_imag(x2)
-    y_real = y_full.real * damp
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    return _sanitize_out(y).unsqueeze(-1)
+    y = x1 * x2
+    y = _sanitize_out(y)
+    return y.unsqueeze(-1)
 
 
 def div_operation(x1: torch.Tensor, x2: torch.Tensor, stair_step_size: float) -> torch.Tensor:
-    y_real = (x1 / x2).real
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    return _sanitize_out(y).unsqueeze(-1)
+    # stair_step_size kept for interface compatibility; unused
+    y = x1 / x2
+    y = _sanitize_out(y)
+    return y.unsqueeze(-1)
 
 
 def power_operation(x1: torch.Tensor, x2: torch.Tensor, stair_step_size: float | None = None) -> torch.Tensor:
-    y_full = x1 ** x2
-    damp = _damp_from_imag(x1) * _damp_from_imag(x2)
-    y_real = y_full.real * damp
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    return _sanitize_out(y).unsqueeze(-1)
+    # stair_step_size kept for interface compatibility; unused
+    y = x1 ** x2
+    y = _sanitize_out(y)
+    return y.unsqueeze(-1)
 
 
 class UnarySurrogate(nn.Module):
