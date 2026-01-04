@@ -11,18 +11,18 @@ FEATURE_NAMES: List[str] = ["x0", "x1", "x2", "x3", "x4"]
 class KornsBenchmarkConfig:
     hdf5_path: str = "korns_dataset.hdf5"
     # results_csv_path: str = "korns_benchmark_results.csv"
-    test_size: float = 0.2
+    test_size: float = 0.1
     split_seed: int = 0
     per_problem_seed_offset: int = 1000
     algo_seed_offset: int = 10_000
     run_seed_offset: int = 1_000_000
-    n_runs: int = 1
+    n_runs: int = 5
 
 
 @dataclass(frozen=True)
 class PySRConfig:
-    niterations: int = 1
-    populations: int = 20
+    niterations: int = 100
+    populations: int = 100
     maxsize: int = 20
     timeout_in_seconds: Optional[int] = None
     unary_ops: List[str] = ("sin", "cos", "tan", "tanh", "exp", "log", "sqrt")
