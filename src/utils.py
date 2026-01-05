@@ -14,9 +14,6 @@ import torch.nn as nn
 # Reproducibility
 # -------------------------
 def set_seed(seed: int = 42) -> None:
-    """
-    Set random seeds for reproducibility.
-    """
     np.random.seed(seed)
     random.seed(seed)
     torch.manual_seed(seed)
@@ -30,9 +27,6 @@ def set_seed(seed: int = 42) -> None:
 
 
 def timeit(func: Callable) -> Callable:
-    """
-    Simple timing decorator.
-    """
     def wrapper(*args, **kwargs):
         start = time.perf_counter()
         result = func(*args, **kwargs)
@@ -47,10 +41,6 @@ def timeit(func: Callable) -> Callable:
 # L1L0 smooth sparsity penalty
 # -------------------------
 class L1L0Smooth(nn.Module):
-    """
-    Modified L1 penalty with near-zero smoothing and L0-like saturation.
-    """
-
     def __init__(self):
         super().__init__()
 
@@ -70,125 +60,23 @@ def l1l0_smooth(
     s: float = 0.05,
     eps: float = 1e-12,
 ) -> torch.Tensor:
-    """
-    L1L0-like penalty:
-      - smooth around 0 to keep gradients well-behaved
-      - saturates for large |x| like an L0 count
-    """
     if isinstance(input_tensor, (list, tuple)):
         return sum(l1l0_smooth(t, alpha=alpha, s=s, eps=eps) for t in input_tensor)
 
     x = input_tensor
     absx = torch.abs(x)
 
-    # Smooth |x| near 0 with a quartic polynomial (C1-continuous)
     inner = absx < s
     poly = (x**4) / (-8.0 * s**3) + (x**2) * (3.0 / (4.0 * s)) + 3.0 * s / 8.0
     smooth_abs = torch.where(inner, poly, absx)
 
-    # L1L0-style penalty
     penalty = ((alpha + 1.0) * smooth_abs) / (alpha + smooth_abs + eps)
-
     return torch.sum(penalty)
 
 
 # -------------------------
-# Alpha scheduling (exponential)
+# Train one epoch
 # -------------------------
-def compute_alpha(
-    epoch: int,
-    l1l0_start_epoch: int,
-    l1l0_end_epoch: int,
-    alpha_start: float,
-    alpha_end: float,
-) -> tuple[float, bool]:
-    """
-    Compute alpha_t for L1L0 and whether to use regularization
-    in the given epoch.
-
-    Exponential interpolation between alpha_start and alpha_end
-    on [l1l0_start_epoch, l1l0_end_epoch].
-    """
-    if epoch < l1l0_start_epoch:
-        # no sparsity yet
-        return alpha_start, False
-
-    if epoch <= l1l0_end_epoch:
-        t_rel = epoch - l1l0_start_epoch
-        T_rel = max(1, l1l0_end_epoch - l1l0_start_epoch)
-        decay_ratio = t_rel / T_rel
-        alpha_t = alpha_start * ((alpha_end / alpha_start) ** decay_ratio)
-        return alpha_t, True
-
-    # after end epoch, keep alpha at final value
-    return alpha_end, True
-
-
-def _anneal_coeff(
-    epoch_in_cycle: int,
-    anneal_epochs: int,
-    start: float,
-    end: float,
-    mode: str,
-) -> float:
-    if anneal_epochs <= 0:
-        return float(end)
-
-    t = min(max(epoch_in_cycle, 0), anneal_epochs)
-    r = t / max(1, anneal_epochs)
-
-    if mode == "linear":
-        return float(start + (end - start) * r)
-
-    if mode == "exp":
-        if start <= 0 or end <= 0:
-            return float(start + (end - start) * r)
-        return float(start * ((end / start) ** r))
-
-    raise ValueError(f"Unknown anneal mode: {mode!r}")
-
-
-def imag_reinit_scale_from_loss(
-    data_loss: float,
-    *,
-    gain: float = 10.0,
-    sigma_min: float,
-    sigma_max: float,
-    eps: float = 1e-16,
-) -> float:
-    """
-    sigma = clip(gain * sqrt(data_loss), sigma_min, sigma_max)
-
-    Examples (gain=10):
-      L=1e-2 -> sigma=1
-      L=1e-4 -> sigma=0.1
-    """
-    L = max(float(data_loss), eps)
-    sigma = gain * (L ** 0.5)
-    if sigma < sigma_min:
-        sigma = sigma_min
-    if sigma > sigma_max:
-        sigma = sigma_max
-    return sigma
-
-@torch.no_grad()
-def reinit_imag_weights_(model: torch.nn.Module, scale: float) -> None:
-    """Reinitialize Im(weights) ~ U(-scale/2, scale/2) for ACTIVE (mask==1) entries only."""
-    for layer in model.symbolic_layers:
-        w = layer.weights.data
-        m = layer.mask.data.bool()
-        new_imag = (torch.rand_like(w.imag) - 0.5) * scale
-        imag = torch.where(m, new_imag, torch.zeros_like(new_imag))
-        layer.weights.data = torch.complex(w.real, imag)
-
-    w = model.assembly_layer.weights.data
-    m = model.assembly_layer.mask.data.bool()
-    new_imag = (torch.rand_like(w.imag) - 0.5) * scale
-    imag = torch.where(m, new_imag, torch.zeros_like(new_imag))
-    model.assembly_layer.weights.data = torch.complex(w.real, imag)
-
-    
-
 def train_one_epoch(
     epoch: int,
     dataloader: DataLoader,
@@ -197,18 +85,25 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device | str,
     *,
-    alpha_t: float,
-    sparsity_enabled: bool,
+    # L1L0
+    l1l0_enabled: bool,
     l1l0_use_real_only: bool,
-    imag_weights_penalty_enabled: bool,
     l1l0_coeff: float,
-    imag_weights_penalty_coeff: float,
+    l1l0_alpha: float,
     l1l0_s: float,
     l1l0_eps: float,
+    # imag penalty
+    imag_weights_penalty_enabled: bool,
+    imag_weights_penalty_coeff: float,
+    # pruning
     prune_now: bool,
     prune_threshold: float,
+    # division normalization
     normalize_divisions: bool = False,
     normalize_divisions_eps: float = 1e-12,
+    # output clamp
+    clamp_pred: bool = True,
+    clamp_limit: float = 1e15,
 ):
     model.train()
     device = torch.device(device)
@@ -229,21 +124,16 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
         pred = model(X)
 
-        # pred_real = pred.real
-        # limit = 1e30
-        # pred_real = torch.clamp(pred_real, -limit, limit)
-
-        # data_loss = loss_fn(pred.real, y)
-        limit = 1e15
-        pred = torch.complex(
-            torch.clamp(pred.real, -limit, limit),
-            torch.clamp(pred.imag, -limit, limit),
-        )
+        if clamp_pred:
+            pred = torch.complex(
+                torch.clamp(pred.real, -clamp_limit, clamp_limit),
+                torch.clamp(pred.imag, -clamp_limit, clamp_limit),
+            )
 
         data_loss = loss_fn(pred, y)
 
         # ----------------- L1L0 sparsity -----------------
-        if sparsity_enabled and l1l0_coeff > 0.0:
+        if l1l0_enabled and l1l0_coeff > 0.0:
             if l1l0_use_real_only:
                 reg_target = model.get_real_weights_list()
             else:
@@ -251,7 +141,9 @@ def train_one_epoch(
                 imag_list = model.get_imag_weights_list()
                 reg_target = [torch.sqrt(r**2 + i**2) for r, i in zip(real_list, imag_list)]
 
-            real_reg = l1l0_coeff * l1l0_penalty(reg_target, alpha=alpha_t, s=l1l0_s, eps=l1l0_eps)
+            real_reg = l1l0_coeff * l1l0_penalty(
+                reg_target, alpha=l1l0_alpha, s=l1l0_s, eps=l1l0_eps
+            )
         else:
             real_reg = torch.tensor(0.0, device=device)
 
@@ -286,8 +178,8 @@ def train_one_epoch(
 
     # normalize division mixing once per epoch
     if normalize_divisions:
-        n_norm = model.normalize_all_divisions_(eps=normalize_divisions_eps)
-    
+        model.normalize_all_divisions_(eps=normalize_divisions_eps)
+
     denom = max(1, num_samples)
     return (
         total_loss / denom,
@@ -301,11 +193,11 @@ def train_one_epoch(
 def train(
     model: torch.nn.Module,
     dataloader: DataLoader,
-    optimizer: torch.optim.Optimizer,  # ignored
+    optimizer: torch.optim.Optimizer,
     loss_fn: Callable,
     cfg,
     device: torch.device | str,
-    scheduler: torch.optim.lr_scheduler._LRScheduler | None = None,  # ignored
+    scheduler=None,  # used ONLY in Phase 3 (e.g., ReduceLROnPlateau)
 ):
     device = torch.device(device)
     global_epoch = 0
@@ -313,76 +205,33 @@ def train(
     sl0_weights, sl1_weights, al_weights = [], [], []
     data_losses, imag_w_losses = [], []
 
-    def _make_scheduler(opt):
-        if cfg.scheduler == "ReduceLROnPlateau":
-            return torch.optim.lr_scheduler.ReduceLROnPlateau(opt, **cfg.schedulerparams)
-        return None
-
-    def _plateau_update(
-        best: float, no_improve: int, current: float, rel_tol: float
-    ) -> tuple[float, int]:
-        # improvement if current <= best * (1 - rel_tol)
-        if current <= best * (1.0 - rel_tol):
-            return current, 0
-        return best, no_improve + 1
-
-    # ----------------------------------------------------------
-    # Single optimizer + scheduler for all phases.
-    # Scheduler is reset ONLY when we reinit imaginary weights.
-    # ----------------------------------------------------------
-    opt = optimizer #torch.optim.Adam(model.parameters(), lr=cfg.lr)
-    sch = None # _make_scheduler(opt)
+    opt = optimizer
+    sch = scheduler  # do not touch in phases 1/2
 
     def _run_phase(
         phase_name: str,
         num_epochs: int,
         *,
+        # L1L0
         l1l0_enabled: bool,
         l1l0_coeff: float,
         l1l0_use_real_only: bool,
-        pruning_enabled: bool,
+        # imag penalty
         imag_enabled: bool,
-        do_resets: bool,
-        imag_coeff_fixed: float | None,
-        phase2_scheduler_warmup: int = 0,
+        imag_coeff: float,
+        # pruning
+        pruning_enabled: bool,
+        pruning_start_epoch: int,
+        pruning_period: int,
+        pruning_threshold: float,
     ):
-        nonlocal global_epoch, sl0_weights, al_weights, data_losses, imag_w_losses
+        nonlocal global_epoch, sl0_weights, sl1_weights, al_weights, data_losses, imag_w_losses
         nonlocal opt, sch
 
-        # cycle state for imag anneal/reset
-        cycle_epoch = 0
-        best_data = float("inf")
-        no_improve = 0
-
         for e in range(num_epochs):
-            # imag coefficient: fixed (phase 3) or annealed per cycle (phases 1/2)
-            if imag_coeff_fixed is not None:
-                imag_coeff = float(imag_coeff_fixed)
-            else:
-                imag_coeff = _anneal_coeff(
-                    epoch_in_cycle=cycle_epoch,
-                    anneal_epochs=cfg.imag_anneal_epochs,
-                    start=cfg.imag_w_coeff_start,
-                    end=cfg.imag_w_coeff_end,
-                    mode=cfg.imag_anneal_mode,
-                )
-
-            # sparsity schedule
-            if l1l0_enabled and l1l0_coeff > 0.0:
-                alpha_t, sparsity_enabled = compute_alpha(
-                    e,
-                    l1l0_start_epoch=cfg.l1l0_start_epoch,
-                    l1l0_end_epoch=cfg.l1l0_end_epoch,
-                    alpha_start=cfg.alpha_start,
-                    alpha_end=cfg.alpha_end,
-                )
-            else:
-                alpha_t, sparsity_enabled = 0.0, False
-
-            # pruning schedule
             prune_now = False
-            if pruning_enabled and cfg.pruning_threshold > 0.0:
-                if e >= cfg.pruning_start_epoch and (e - cfg.pruning_start_epoch) % cfg.pruning_period == 0:
+            if pruning_enabled and pruning_threshold > 0.0:
+                if e >= pruning_start_epoch and (e - pruning_start_epoch) % pruning_period == 0:
                     prune_now = True
 
             avg_total, avg_data, _avg_reg, avg_real_reg, avg_imag_w_reg = train_one_epoch(
@@ -390,29 +239,32 @@ def train(
                 dataloader=dataloader,
                 model=model,
                 loss_fn=loss_fn,
-                optimizer=opt,  # persistent optimizer
+                optimizer=opt,
                 device=device,
-                alpha_t=alpha_t,
-                sparsity_enabled=sparsity_enabled,
+                # L1L0 (constant alpha from config)
+                l1l0_enabled=l1l0_enabled,
                 l1l0_use_real_only=l1l0_use_real_only,
-                imag_weights_penalty_enabled=imag_enabled,
                 l1l0_coeff=l1l0_coeff,
-                imag_weights_penalty_coeff=imag_coeff if imag_enabled else 0.0,
+                l1l0_alpha=cfg.l1l0_alpha,
                 l1l0_s=cfg.l1l0_s,
                 l1l0_eps=cfg.l1l0_eps,
+                # imag penalty (constant per phase)
+                imag_weights_penalty_enabled=imag_enabled,
+                imag_weights_penalty_coeff=imag_coeff if imag_enabled else 0.0,
+                # pruning
                 prune_now=prune_now,
-                prune_threshold=cfg.pruning_threshold if prune_now else 0.0,
+                prune_threshold=pruning_threshold if prune_now else 0.0,
+                # division normalization
                 normalize_divisions=cfg.normalize_divisions,
                 normalize_divisions_eps=cfg.normalize_divisions_eps,
+                # clamp
+                clamp_pred=getattr(cfg, "clamp_pred", True),
+                clamp_limit=getattr(cfg, "clamp_limit", 1e15),
             )
 
-            # scheduler (persistent; reset only on imag reinit)
-            # if sch is not None:
-            #     if phase_name == "Phase 2" and e < phase2_scheduler_warmup:
-            #         pass
-            #     else:
-            #         sch.step(avg_total)
+            # Scheduler ONLY in Phase 3
             if (phase_name == "Phase 3") and (sch is not None):
+                # ReduceLROnPlateau expects a metric
                 sch.step(avg_data)
 
             if (global_epoch + 1) % cfg.print_every == 0 or global_epoch == 0:
@@ -421,52 +273,8 @@ def train(
                     f"[{phase_name} | Epoch {global_epoch+1}] "
                     f"total={avg_total:.4e}, data={avg_data:.4e}, "
                     f"sparsity_reg={avg_real_reg:.4e}, imag_w={avg_imag_w_reg:.4e}, "
-                    f"alpha={alpha_t:.3e}, imag_coeff={imag_coeff:.3e}, lr={lr:.2e}"
+                    f"alpha={cfg.l1l0_alpha:.3e}, imag_coeff={imag_coeff:.3e}, lr={lr:.2e}"
                 )
-
-            # plateau -> reset imag weights & restart anneal cycle (phases 1/2)
-            if do_resets and imag_enabled:
-                if e >= cfg.imag_plateau_min_epoch_in_phase:
-                    can_check = True
-                    if cfg.imag_plateau_check_after_anneal:
-                        can_check = cycle_epoch >= cfg.imag_anneal_epochs
-
-                    if can_check:
-                        best_data, no_improve = _plateau_update(
-                            best_data, no_improve, avg_data, cfg.imag_plateau_rel_tol
-                        )
-                        if no_improve >= cfg.imag_plateau_patience:
-                            # 1) reinit imaginary weights
-                            # reinit_imag_weights_(model, cfg.imag_reinit_scale)
-                            scale = imag_reinit_scale_from_loss(
-                                avg_data,
-                                gain=cfg.imag_reinit_gain,
-                                sigma_min=cfg.imag_reinit_scale_min,
-                                sigma_max=cfg.imag_reinit_scale_max,
-                            )
-                            reinit_imag_weights_(model, scale)
-                            reinit_imag_weights_(model, scale)
-
-                            # 2) reset optimizer LR to initial value
-                            for g in opt.param_groups:
-                                g["lr"] = cfg.lr
-
-                            # 3) re-create scheduler (fresh state)
-                            if sch is not None:
-                                sch = _make_scheduler(opt)
-
-                            # 4) restart cycle
-                            cycle_epoch = 0
-                            best_data = float("inf")
-                            no_improve = 0
-                        else:
-                            cycle_epoch += 1
-                    else:
-                        cycle_epoch += 1
-                else:
-                    cycle_epoch += 1
-            else:
-                cycle_epoch += 1
 
             global_epoch += 1
             sl0_weights.append(model.symbolic_layers[0].weights.detach().cpu().clone().numpy().copy())
@@ -483,10 +291,12 @@ def train(
         l1l0_enabled=cfg.l1l0_enabled_phase1,
         l1l0_coeff=cfg.l1l0_real_reg_coeff_phase1,
         l1l0_use_real_only=cfg.l1l0_on_real_only,
-        pruning_enabled=cfg.pruning_enabled_phase1,
         imag_enabled=cfg.imag_weights_penalty_enabled_phase1,
-        do_resets=True,
-        imag_coeff_fixed=None,
+        imag_coeff=cfg.imag_w_coeff_phase1,
+        pruning_enabled=cfg.pruning_enabled_phase1,
+        pruning_start_epoch=cfg.pruning_start_epoch_phase1,
+        pruning_period=cfg.pruning_period_phase1,
+        pruning_threshold=cfg.pruning_threshold_phase1,
     )
 
     # --------------------------
@@ -498,28 +308,29 @@ def train(
         l1l0_enabled=cfg.l1l0_enabled_phase2,
         l1l0_coeff=cfg.l1l0_real_reg_coeff_phase2,
         l1l0_use_real_only=cfg.l1l0_on_real_only,
-        pruning_enabled=cfg.pruning_enabled_phase2,
         imag_enabled=cfg.imag_weights_penalty_enabled_phase2,
-        do_resets=True,
-        imag_coeff_fixed=None,
-        phase2_scheduler_warmup=cfg.scheduler_warmup_phase2,
+        imag_coeff=cfg.imag_w_coeff_phase2,
+        pruning_enabled=cfg.pruning_enabled_phase2,
+        pruning_start_epoch=cfg.pruning_start_epoch_phase2,
+        pruning_period=cfg.pruning_period_phase2,
+        pruning_threshold=cfg.pruning_threshold_phase2,
     )
 
     # --------------------------
     # PHASE 3
     # --------------------------
-    sch = _make_scheduler(opt)
     _run_phase(
         "Phase 3",
         cfg.phase3_epochs,
         l1l0_enabled=cfg.l1l0_enabled_phase3,
-        l1l0_coeff=0.0,
+        l1l0_coeff=cfg.l1l0_real_reg_coeff_phase3,
         l1l0_use_real_only=cfg.l1l0_on_real_only,
-        pruning_enabled=cfg.pruning_enabled_phase3,
         imag_enabled=cfg.imag_weights_penalty_enabled_phase3,
-        do_resets=False,
-        imag_coeff_fixed=cfg.imag_w_coeff_phase3,
+        imag_coeff=cfg.imag_w_coeff_phase3,
+        pruning_enabled=cfg.pruning_enabled_phase3,
+        pruning_start_epoch=cfg.pruning_start_epoch_phase3,
+        pruning_period=cfg.pruning_period_phase3,
+        pruning_threshold=cfg.pruning_threshold_phase3,
     )
 
     return model, (sl0_weights, sl1_weights, al_weights, imag_w_losses, data_losses)
-

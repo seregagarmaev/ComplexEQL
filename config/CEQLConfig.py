@@ -10,80 +10,77 @@ class ModelTrainingConfig:
     # Optimization
     # -------------------------
     lr = 1e-3
-    scheduler = "ReduceLROnPlateau"
-    schedulerparams = dict(mode="min", patience=500, factor=0.1, min_lr=1e-8)
-    scheduler_warmup_phase2 = 500
+    use_scheduler_phase3 = True
+    scheduler = "ReduceLROnPlateau"   # or None
+    schedulerparams = dict(mode="min", patience=1000, factor=0.1, min_lr=1e-8)
 
+    # -------------------------
     # -------------------------
     # Phase control
     # -------------------------
-    phase1_epochs = 10000
-    phase2_epochs = 10000
+    phase1_epochs = 20000
+    phase2_epochs = 20000
     phase3_epochs = 5000
     print_every = 100
 
-    # ==========================================================
-    # Imaginary-weights anneal + plateau-reset (shared for phases 1/2)
-    # ==========================================================
-    imag_weights_penalty_enabled_phase1 = True
-    imag_weights_penalty_enabled_phase2 = True
-    imag_weights_penalty_enabled_phase3 = True
+    # -------------------------
+    # L1L0 (constant alpha)
+    # -------------------------
+    l1l0_alpha = 1e-1
+    l1l0_s = 0.001
+    l1l0_eps = 1e-12
 
-    imag_anneal_epochs = 2000
-    imag_w_coeff_start = 1e-4
-    imag_w_coeff_end = 1e3
-    imag_anneal_mode = "exp"  # "linear" or "exp"
+    l1l0_on_real_only = False
 
-    # plateau logic: after anneal in each cycle, monitor data loss
-    imag_plateau_patience = 500
-    imag_plateau_rel_tol = 1e-4 # 1e-6
-    imag_plateau_check_after_anneal = True  # start plateau counting only after anneal is finished in the cycle
-    imag_plateau_min_epoch_in_phase = 10000     # additional warmup in each phase before plateau logic starts
-
-    # when plateau triggers: reinit Im(weights) and restart anneal cycle
-    # imag_reinit_scale = 1.0  # Im ~ U(-scale/2, scale/2) for active weights
-    imag_reinit_gain = 1.0
-    imag_reinit_scale_min = 1e-4
-    imag_reinit_scale_max = 0.1
-
-    # ==========================================================
-    # Sparsification (Phase 2 only): L1L0 on REAL(weights) only
-    # ==========================================================
     l1l0_enabled_phase1 = False
     l1l0_enabled_phase2 = True
     l1l0_enabled_phase3 = False
 
-    l1l0_on_real_only = False #True
     l1l0_real_reg_coeff_phase1 = 1e-3
-    l1l0_real_reg_coeff_phase2 = 1e1
+    l1l0_real_reg_coeff_phase2 = 1e-2
+    l1l0_real_reg_coeff_phase3 = 0.0
 
-    # L1L0 schedule parameters (used when enabled)
-    alpha_start = 1e-1
-    alpha_end = 1e-1
-    l1l0_start_epoch = 0
-    l1l0_end_epoch = phase2_epochs
-    l1l0_s = 0.001
-    l1l0_eps = 1e-12
+    # -------------------------
+    # Imag penalty (constant per phase)
+    # -------------------------
+    imag_weights_penalty_enabled_phase1 = True
+    imag_weights_penalty_enabled_phase2 = True
+    imag_weights_penalty_enabled_phase3 = True
 
-    # ==========================================================
-    # Pruning (Phase 2 only, as per your strategy)
-    # ==========================================================
+    imag_w_coeff_phase1 = 1e-1
+    imag_w_coeff_phase2 = 1e-1
+    imag_w_coeff_phase3 = 1e3
+
+    # -------------------------
+    # Pruning (per phase)
+    # -------------------------
     pruning_enabled_phase1 = False
     pruning_enabled_phase2 = True
     pruning_enabled_phase3 = False
 
-    pruning_start_epoch = 5000
-    pruning_period = 1000
-    pruning_threshold = 1e-2
+    pruning_start_epoch_phase1 = 0
+    pruning_period_phase1 = 1000
+    pruning_threshold_phase1 = 1e-2
 
-    # ==========================================================
-    # Phase 3: keep imag penalty "big" (fixed), no anneal/reset, no sparsity/pruning
-    # ==========================================================
-    imag_w_coeff_phase3 = 1e3 #imag_w_coeff_end
+    pruning_start_epoch_phase2 = 10000
+    pruning_period_phase2 = 1000
+    pruning_threshold_phase2 = 1e-2
 
-    # division normalization
+    pruning_start_epoch_phase3 = 0
+    pruning_period_phase3 = 1000
+    pruning_threshold_phase3 = 1e-2
+
+    # -------------------------
+    # Division normalization
+    # -------------------------
     normalize_divisions = True
     normalize_divisions_eps = 1e-12
+
+    # -------------------------
+    # Optional clamp (kept from your utils behavior)
+    # -------------------------
+    clamp_pred = True
+    clamp_limit = 1e15
     
     
 
@@ -106,54 +103,36 @@ class NomtoConfig:
             {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
             {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
         ],
-        # [
-        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-        #     {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-        #     {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-        #     {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-        #     {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-        #     {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-        #     {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-        #     {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
-        #     {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
-        #     {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
-        #     {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
-        #     {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
-        #     {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
-        # ],
-        # [
-        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-        #     {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-        #     {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-        #     {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-        #     {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-        #     {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-        #     {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-        #     {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
-        #     {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
-        #     {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
-        #     {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
-        #     {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
-        #     {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
-        # ],
+        [
+            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
+            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
+            {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
+            {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
+            {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
+            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
+        ],
+        [
+            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
+            {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
+            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+            {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
+            {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
+            {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
+            {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
+            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
+        ],
     ]
 
     n_input_fields = 2
