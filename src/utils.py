@@ -172,9 +172,9 @@ def train_one_epoch(
 
     # pruning by amplitude (|w|) if requested
     if prune_now and prune_threshold > 0.0:
-        pruned = model.prune_by_threshold(prune_threshold)
+        pruned = model.cascade_threshold_prunning(threshold=prune_threshold, eps=1e-12)
         if pruned > 0:
-            print(f"[prune] Epoch {epoch}: pruned {pruned} weights (|w| < {prune_threshold:g})")
+            print(f"[prune] Epoch {epoch}: pruned {pruned} edges (cascade, |w| < {prune_threshold:g})")
 
     # normalize division mixing once per epoch
     if normalize_divisions:

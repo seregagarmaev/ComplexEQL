@@ -562,6 +562,146 @@ class ComplexEQL(nn.Module):
             total += layer.prune_by_threshold(threshold)
         total += self.assembly_layer.prune_by_threshold(threshold)
         return total
+    
+    @torch.no_grad()
+    def cascade_threshold_prunning(self, threshold: float, eps: float = 1e-12) -> int:
+        """
+        Cascading pruning from the output node:
+          - Start from assembly weights: keep only inputs with |w| >= threshold
+          - Backpropagate "required" operator outputs layer-by-layer
+          - For required outputs, prune their incoming mixing edges with |w| < threshold
+          - Any operator output not required is fully pruned (its input columns masked out)
+
+        Returns number of mask entries newly set to 0.
+        """
+
+        def active_edge_mask(w: torch.Tensor, m: torch.Tensor) -> torch.Tensor:
+            return (m > 0.5) & (w.abs() >= max(threshold, eps))
+
+        n0 = int(self.cfg.n_input_fields)
+        L = len(self.symbolic_layers)
+
+        newly_pruned = 0
+
+        # ---------- 1) Assembly: decide which inputs are kept ----------
+        asm_w = self.assembly_layer.weights[:, 0]
+        asm_m = self.assembly_layer.mask[:, 0]
+        keep_asm = active_edge_mask(asm_w, asm_m)  # (n0 + last_ops,)
+
+        # prune assembly inputs that are not kept
+        drop_asm = (asm_m > 0.5) & (~keep_asm)
+        if drop_asm.any():
+            newly_pruned += int(drop_asm.sum().item())
+            self.assembly_layer.mask[drop_asm, 0] = 0.0
+            self.assembly_layer.weights[drop_asm, 0] = torch.complex(
+                torch.zeros_like(self.assembly_layer.weights.real[drop_asm, 0]),
+                torch.zeros_like(self.assembly_layer.weights.imag[drop_asm, 0]),
+            )
+
+        last_ops = self.symbolic_layers[-1].n_ops
+        req_h_next = keep_asm[n0:n0 + last_ops].clone()  # required outputs of last symbolic layer
+
+        # ---------- 2) Backward cascade through symbolic layers ----------
+        for layer_idx in range(L - 1, -1, -1):
+            layer = self.symbolic_layers[layer_idx]
+            req_out = req_h_next.clone()  # (layer.n_ops,)
+
+            # 2a) prune operators not required (kill whole operator inputs)
+            # unary k -> column k
+            for k in range(layer.n_unary_nos):
+                if not bool(req_out[k].item()):
+                    col = k
+                    active_before = (layer.mask[:, col] > 0.5).sum().item()
+                    if active_before > 0:
+                        newly_pruned += int(active_before)
+                        layer.mask[:, col] = 0.0
+                        layer.weights[:, col] = torch.complex(
+                            torch.zeros_like(layer.weights.real[:, col]),
+                            torch.zeros_like(layer.weights.imag[:, col]),
+                        )
+
+            # binary i -> columns (a_col, b_col)
+            for i in range(layer.n_binary_nos):
+                out_idx = layer.n_unary_nos + i
+                if not bool(req_out[out_idx].item()):
+                    a_col = layer.n_unary_nos + 2 * i
+                    b_col = a_col + 1
+                    active_a = (layer.mask[:, a_col] > 0.5).sum().item()
+                    active_b = (layer.mask[:, b_col] > 0.5).sum().item()
+                    if active_a > 0:
+                        newly_pruned += int(active_a)
+                        layer.mask[:, a_col] = 0.0
+                        layer.weights[:, a_col] = torch.complex(
+                            torch.zeros_like(layer.weights.real[:, a_col]),
+                            torch.zeros_like(layer.weights.imag[:, a_col]),
+                        )
+                    if active_b > 0:
+                        newly_pruned += int(active_b)
+                        layer.mask[:, b_col] = 0.0
+                        layer.weights[:, b_col] = torch.complex(
+                            torch.zeros_like(layer.weights.real[:, b_col]),
+                            torch.zeros_like(layer.weights.imag[:, b_col]),
+                        )
+
+            # 2b) for required operators, prune their incoming mixing edges below threshold
+            # and compute which inputs to this layer are needed by the kept edges
+            req_in_this_layer = torch.zeros(layer.n_input_fields, dtype=torch.bool, device=layer.weights.device)
+
+            # unary
+            for k in range(layer.n_unary_nos):
+                if not bool(req_out[k].item()):
+                    continue
+                col = k
+                keep_col = active_edge_mask(layer.weights[:, col], layer.mask[:, col])
+                drop_col = (layer.mask[:, col] > 0.5) & (~keep_col)
+                if drop_col.any():
+                    newly_pruned += int(drop_col.sum().item())
+                    layer.mask[drop_col, col] = 0.0
+                    layer.weights[drop_col, col] = torch.complex(
+                        torch.zeros_like(layer.weights.real[drop_col, col]),
+                        torch.zeros_like(layer.weights.imag[drop_col, col]),
+                    )
+                req_in_this_layer |= keep_col
+
+            # binary
+            for i in range(layer.n_binary_nos):
+                out_idx = layer.n_unary_nos + i
+                if not bool(req_out[out_idx].item()):
+                    continue
+                a_col = layer.n_unary_nos + 2 * i
+                b_col = a_col + 1
+
+                keep_a = active_edge_mask(layer.weights[:, a_col], layer.mask[:, a_col])
+                keep_b = active_edge_mask(layer.weights[:, b_col], layer.mask[:, b_col])
+
+                drop_a = (layer.mask[:, a_col] > 0.5) & (~keep_a)
+                drop_b = (layer.mask[:, b_col] > 0.5) & (~keep_b)
+
+                if drop_a.any():
+                    newly_pruned += int(drop_a.sum().item())
+                    layer.mask[drop_a, a_col] = 0.0
+                    layer.weights[drop_a, a_col] = torch.complex(
+                        torch.zeros_like(layer.weights.real[drop_a, a_col]),
+                        torch.zeros_like(layer.weights.imag[drop_a, a_col]),
+                    )
+                if drop_b.any():
+                    newly_pruned += int(drop_b.sum().item())
+                    layer.mask[drop_b, b_col] = 0.0
+                    layer.weights[drop_b, b_col] = torch.complex(
+                        torch.zeros_like(layer.weights.real[drop_b, b_col]),
+                        torch.zeros_like(layer.weights.imag[drop_b, b_col]),
+                    )
+
+                req_in_this_layer |= (keep_a | keep_b)
+
+            layer.weights.data = nan_to_num_complex(layer.weights.data, nan=0.0, posinf=0.0, neginf=0.0)
+
+            # propagate required outputs to previous layer (skip connection layout)
+            if layer_idx == 0:
+                break
+            req_h_next = req_in_this_layer[n0:]  # required outputs of previous layer
+
+        return newly_pruned
 
     @torch.no_grad()
     def normalize_all_divisions_(self, eps: float = 1e-12) -> int:
