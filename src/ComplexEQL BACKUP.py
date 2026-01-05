@@ -49,12 +49,14 @@ class SymbolicLayer(nn.Module):
                            and F_ops_in = n_unary + 2 * n_binary
     """
 
-    def __init__(self, cfg, layer_number: int, n_input_fields: int) -> None:
+    def __init__(self, cfg, layer_number: int) -> None:
         super().__init__()
         self.cfg = cfg
         self.layer_number = layer_number
 
-        self.n_input_fields = n_input_fields
+        self.n_input_fields = (
+            cfg.n_input_fields if layer_number == 0 else len(cfg.no_params_list[layer_number - 1])
+        )
 
         unary_nos, binary_nos = load_models(cfg, layer_number)
         self.unary_nos = nn.ModuleList(unary_nos)
@@ -65,8 +67,8 @@ class SymbolicLayer(nn.Module):
         self.n_inputs = self.n_unary_nos + 2 * self.n_binary_nos
 
         # complex weights initialization
-        real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * 0.1
-        imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * 0.1
+        real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) #* 0.1
+        imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) #* 0.1
         init_w = torch.complex(real, imag)  # (F_in, n_inputs), complex
         self.weights = nn.Parameter(init_w)
         self.mask = nn.Parameter(torch.ones_like(real), requires_grad=False)  # real mask
@@ -75,8 +77,12 @@ class SymbolicLayer(nn.Module):
         self._freeze_nos()
 
         # Operator metadata for symbolic readout
-        self.function_names = [no.fname for no in self.unary_nos] + [no.fname for no in self.binary_nos]
-        self.function_types = [no.ftype for no in self.unary_nos] + [no.ftype for no in self.binary_nos]
+        self.function_names = [no.fname for no in self.unary_nos] + [
+            no.fname for no in self.binary_nos
+        ]
+        self.function_types = [no.ftype for no in self.unary_nos] + [
+            no.ftype for no in self.binary_nos
+        ]
         self.functions_dict = cfg.functions_dict
 
     def _freeze_nos(self) -> None:
@@ -257,6 +263,7 @@ class SymbolicLayer(nn.Module):
         if self.n_binary_nos == 0:
             return 0
         
+        # binary ops are indexed after unary ops in self.function_names
         for i in range(self.n_binary_nos):
             op_name = self.function_names[self.n_unary_nos + i]
             if op_name != "div":
@@ -265,9 +272,11 @@ class SymbolicLayer(nn.Module):
             a_col = self.n_unary_nos + 2 * i
             b_col = a_col + 1
 
+            # active mask for these columns
             m_a = self.mask[:, a_col].bool()
             m_b = self.mask[:, b_col].bool()
 
+            # if everything is pruned, nothing to do
             if (not m_a.any()) and (not m_b.any()):
                 continue
 
@@ -284,21 +293,25 @@ class SymbolicLayer(nn.Module):
             if scale <= eps:
                 continue
 
+            # scale BOTH columns (only active entries) to preserve a/b
             w_a_new = torch.where(m_a, w_a / scale, w_a)
             w_b_new = torch.where(m_b, w_b / scale, w_b)
 
             self.weights[:, a_col] = w_a_new
             self.weights[:, b_col] = w_b_new
 
+            # safety
             self.weights.data = nan_to_num_complex(self.weights.data, nan=0.0, posinf=0.0, neginf=0.0)
+
             normalized += 1
 
         return normalized
 
     def weights_for_reg(self) -> torch.Tensor:
-        # return self.weights.reshape(-1)
-        effective = self.weights * self.mask.to(self.weights.dtype)
-        return effective.reshape(-1)
+        """
+        Flattened weights for regularization (magnitude-based, handled outside via .abs()).
+        """
+        return self.weights.reshape(-1)
 
     def lift(self, X: torch.Tensor) -> torch.Tensor:
         """
@@ -326,6 +339,12 @@ class SymbolicLayer(nn.Module):
                 torch.zeros_like(self.weights.imag[to_prune]),
             )
 
+            # self.weights.data = torch.nan_to_num(
+            #     self.weights.data,
+            #     nan=0.0,
+            #     posinf=0.0,
+            #     neginf=0.0,
+            # )
             self.weights.data = nan_to_num_complex(self.weights.data, nan=0.0, posinf=0.0, neginf=0.0)
 
         return num_pruned
@@ -341,27 +360,58 @@ class SymbolicLayer(nn.Module):
 
         # unary
         for i, unary_no in enumerate(self.unary_nos):
-            out = unary_no(X[:, i])  # (B,) -> (B,1)
-            results.append(out)
+            out = unary_no(X[:, i])  # X[:, i]: (B,)
+            # if torch.isnan(out).any() or torch.isinf(out).any():
+            #     raise RuntimeError(f"NaN/Inf in unary op {i} (layer {self.layer_number})")
+            results.append(out)  # (B,1)
 
         # binary
         for i in range(self.n_binary_nos):
             start = self.n_unary_nos + 2 * i
-            num = X[:, start]
-            den = X[:, start + 1]
-            pair = torch.stack((num, den), dim=1)
-            out = self.binary_nos[i](pair)
+            num = X[:, start]       # (B,)
+            den = X[:, start + 1]   # (B,)
+
+            pair = torch.stack((num, den), dim=1)  # (B, 2)
+            out = self.binary_nos[i](pair)         # (B,1)
+
+            # if torch.isnan(out).any() or torch.isinf(out).any():
+            #     print(f"[DEBUG] layer {self.layer_number}, binary {i}")
+
+            #     num_abs = num.abs()
+            #     den_abs = den.abs()
+            #     out_abs = out.abs()
+
+            #     print("  num |.| stats:", num_abs.min().item(), num_abs.max().item())
+            #     print("  den |.| stats:", den_abs.min().item(), den_abs.max().item())
+            #     print("  out |.| stats:", out_abs.min().item(), out_abs.max().item())
+
+            #     raise RuntimeError(f"NaN/Inf in binary op {i} (layer {self.layer_number})")
+
             results.append(out)
 
-        return torch.cat(results, dim=-1)
+        return torch.cat(results, dim=-1)  # (B, n_ops)
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         """
         X: (B, F_in)  ->  (B, n_ops)
         """
-        lifted = self.lift(X)        # (B, n_inputs), complex
+        # if torch.isnan(X).any() or torch.isinf(X).any():
+        #     raise RuntimeError(f"NaN/Inf in inputs at layer {self.layer_number}")
+
+        active = self.mask == 1.0
+        if active.any():
+            w_active = self.weights[active]
+            # if torch.isnan(w_active).any() or torch.isinf(w_active).any():
+            #     raise RuntimeError(f"NaN/Inf in ACTIVE weights at layer {self.layer_number}")
+
+        lifted = self.lift(X)        # (B, F_ops_in), complex
         out = self.apply_NOs(lifted) # (B, n_ops)
+
+        # if torch.isnan(out).any() or torch.isinf(out).any():
+        #     raise RuntimeError(f"NaN/Inf in outputs at layer {self.layer_number}")
+
         return out
+
 
 
 class AssemblyLayer(nn.Module):
@@ -370,6 +420,8 @@ class AssemblyLayer(nn.Module):
       Input:  (B, F_last)
       Weights:(F_last, 1), complex
       Output: (B, 1)
+    Also provides a symbolic readout that mirrors this linear combination
+    using the REAL PART of the complex weights.
     """
 
     def __init__(self, cfg, last_layer_nos: int) -> None:
@@ -383,8 +435,8 @@ class AssemblyLayer(nn.Module):
             self.weights = nn.Parameter(init_w)
             self.mask = nn.Parameter(torch.ones_like(w_real), requires_grad=False)
         else:
-            real = (torch.rand(last_layer_nos, 1) - 0.5) * 0.1
-            imag = (torch.rand(last_layer_nos, 1) - 0.5) * 0.1
+            real = (torch.rand(last_layer_nos, 1) - 0.5) #* 0.1
+            imag = (torch.rand(last_layer_nos, 1) - 0.5) #* 0.1
             init_w = torch.complex(real, imag)
             self.weights = nn.Parameter(init_w)
             self.mask = nn.Parameter(torch.ones_like(real), requires_grad=False)
@@ -448,18 +500,17 @@ class AssemblyLayer(nn.Module):
                 torch.zeros_like(self.weights.real[to_prune]),
                 torch.zeros_like(self.weights.imag[to_prune]),
             )
+
+            # self.weights.data = torch.nan_to_num(
+            #     self.weights.data,
+            #     nan=0.0,
+            #     posinf=0.0,
+            #     neginf=0.0,
+            # )
             self.weights.data = nan_to_num_complex(self.weights.data, nan=0.0, posinf=0.0, neginf=0.0)
 
         return num_pruned
 
-    def weights_for_reg(self) -> torch.Tensor:
-        """
-        Flattened EFFECTIVE weights for regularization (includes pruning mask).
-        Use .abs() outside for magnitude-based penalties.
-        """
-        effective = self.weights * self.mask.to(self.weights.dtype)
-        return effective.reshape(-1)
-    
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         """
         X: (B, F_last)
@@ -467,40 +518,33 @@ class AssemblyLayer(nn.Module):
         → (B, 1), complex
         """
         effective_weights = self.weights * self.mask.to(self.weights.dtype)
+        # if torch.isnan(X).any() or torch.isinf(X).any():
+        #     raise RuntimeError("NaN/Inf in X just before assembly matmul")
+        # if torch.isnan(effective_weights).any() or torch.isinf(effective_weights).any():
+        #     raise RuntimeError("NaN/Inf in effective_weights in AssemblyLayer")
+
         result = torch.matmul(X, effective_weights)  # (B, 1)
         return result
+
 
 
 class ComplexEQL(nn.Module):
     """
     ComplexEQL model: stacks SymbolicLayer blocks and a final AssemblyLayer.
 
-    Skip-connection mapping:
-      - layer 0 input: raw inputs x0
-      - layer l>=1 input: concat([x0, h_{l-1}])
+    Overall mapping:
+      x: (B, F_in) -> y: (B, 1)   (y is complex; you can take y.real for real-valued outputs)
     """
 
     def __init__(self, cfg) -> None:
         super().__init__()
         self.cfg = cfg
 
-        layers: list[SymbolicLayer] = []
-        prev_n_ops: int | None = None
-
-        for layer_idx in range(cfg.n_symbolic_layers):
-            if layer_idx == 0:
-                n_in = int(cfg.n_input_fields)
-            else:
-                n_in = int(cfg.n_input_fields) + int(prev_n_ops)
-            
-            layer = SymbolicLayer(cfg, layer_idx, n_input_fields=n_in).to(cfg.device)
-            layers.append(layer)
-            prev_n_ops = layer.n_ops
-
-        self.symbolic_layers = nn.ModuleList(layers)
+        self.symbolic_layers = nn.ModuleList(
+            [SymbolicLayer(cfg, i).to(cfg.device) for i in range(cfg.n_symbolic_layers)]
+        )
         last_outputs = self.symbolic_layers[-1].n_ops
-        assembly_in_dim = int(cfg.n_input_fields) + int(last_outputs)
-        self.assembly_layer = AssemblyLayer(cfg, assembly_in_dim)
+        self.assembly_layer = AssemblyLayer(cfg, last_outputs)
 
     def get_symbolic_expression(
         self,
@@ -509,17 +553,12 @@ class ComplexEQL(nn.Module):
     ) -> sympy.Expr:
         """
         Propagate SymPy input variables through all layers (using Re(weights))
-        to get a final real-valued symbolic expression, mirroring skip-connections.
+        to get a final real-valued symbolic expression.
         """
-        sym_x0: List[sympy.Expr] = symbolic_inputs
-        sym_h: List[sympy.Expr] = self.symbolic_layers[0].get_symbolic_output(sym_x0, rounding_decimals=rounding_decimals)
-
-        for layer in self.symbolic_layers[1:]:
-            sym_layer_in = sym_x0 + sym_h
-            sym_h = layer.get_symbolic_output(sym_layer_in, rounding_decimals=rounding_decimals)
-        
-        sym_asm_in = sym_x0 + sym_h
-        sym_out = self.assembly_layer.get_symbolic_output(sym_asm_in, rounding_decimals=rounding_decimals)
+        sym_out: List[sympy.Expr] | sympy.Expr = symbolic_inputs
+        for layer in self.symbolic_layers:
+            sym_out = layer.get_symbolic_output(sym_out, rounding_decimals=rounding_decimals)
+        sym_out = self.assembly_layer.get_symbolic_output(sym_out, rounding_decimals=rounding_decimals)
         return prune_small_coeff_terms(sym_out, rounding_decimals)
 
     def get_real_weights_list(self) -> list[torch.Tensor]:
@@ -530,11 +569,11 @@ class ComplexEQL(nn.Module):
         weights_list: list[torch.Tensor] = []
 
         for layer in self.symbolic_layers:
-            effective = layer.weights * layer.mask.to(layer.weights.dtype)
-            weights_list.append(effective.real.view(-1))
+            # layer.weights: complex -> take real part
+            weights_list.append(layer.weights.real.view(-1))
 
-        effective = self.assembly_layer.weights * self.assembly_layer.mask.to(self.assembly_layer.weights.dtype)
-        weights_list.append(effective.real.view(-1))
+        # assembly weights: complex -> real part
+        weights_list.append(self.assembly_layer.weights.real.view(-1))
 
         return weights_list
 
@@ -546,14 +585,15 @@ class ComplexEQL(nn.Module):
         Each tensor is detached view of the imaginary components.
         """
         weights_list: list[torch.Tensor] = []
-
+    
+        # symbolic layers
         for layer in self.symbolic_layers:
-            effective = layer.weights * layer.mask.to(layer.weights.dtype)
-            weights_list.append(effective.imag.view(-1))
-
-        effective = self.assembly_layer.weights * self.assembly_layer.mask.to(self.assembly_layer.weights.dtype)
-        weights_list.append(effective.imag.view(-1))
-
+            # layer.weights: complex -> take imag part, flatten
+            weights_list.append(layer.weights.imag.view(-1))
+    
+        # assembly layer
+        weights_list.append(self.assembly_layer.weights.imag.view(-1))
+    
         return weights_list
 
     def prune_by_threshold(self, threshold: float) -> int:
@@ -565,17 +605,30 @@ class ComplexEQL(nn.Module):
 
     @torch.no_grad()
     def normalize_all_divisions_(self, eps: float = 1e-12) -> int:
+        """
+        Apply division-mixing normalization to all symbolic layers.
+
+        Returns
+        -------
+        int
+            Total number of div-operators normalized across all layers.
+        """
         total = 0
         for layer in self.symbolic_layers:
             total += layer.normalize_division_mixing_(eps=eps)
         return total
 
     def sanitize_gradients(self, max_grad: float = 1e3) -> None:
+        """
+        Replace NaN/Inf in grads and clamp magnitude for complex gradients.
+        Call after loss.backward() and before optimizer.step().
+        """
         with torch.no_grad():
             for p in self.parameters():
                 if p.grad is None:
                     continue
                 g = p.grad.data
+                # g = torch.nan_to_num(g, nan=0.0, posinf=0.0, neginf=0.0)
                 g = nan_to_num_complex(g, nan=0.0, posinf=0.0, neginf=0.0)
                 mag = torch.abs(g)
                 mask = mag > max_grad
@@ -586,6 +639,10 @@ class ComplexEQL(nn.Module):
                 p.grad.data.copy_(g)
 
     def sanitize_weights(self, clamp_value: float = 1e6) -> None:
+        """
+        Clean NaN/Inf in complex weights and clamp magnitude.
+        (This is optimization safety, not part of the symbolic operations.)
+        """
         def _clamp_complex_by_magnitude(x: torch.Tensor, max_mag: float) -> torch.Tensor:
             mag = torch.abs(x)
             mask = mag > max_mag
@@ -598,31 +655,22 @@ class ComplexEQL(nn.Module):
         with torch.no_grad():
             for layer in self.symbolic_layers:
                 w = layer.weights.data
+                # w = torch.nan_to_num(w, nan=0.0, posinf=0.0, neginf=0.0)
                 w = nan_to_num_complex(w, nan=0.0, posinf=0.0, neginf=0.0)
                 w = _clamp_complex_by_magnitude(w, clamp_value)
                 layer.weights.data.copy_(w)
 
             w = self.assembly_layer.weights.data
+            # w = torch.nan_to_num(w, nan=0.0, posinf=0.0, neginf=0.0)
             w = nan_to_num_complex(w, nan=0.0, posinf=0.0, neginf=0.0)
             w = _clamp_complex_by_magnitude(w, clamp_value)
             self.assembly_layer.weights.data.copy_(w)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        x: (B, F0) -> y: (B, 1), complex
-
-        Skip-connection mapping:
-          layer 0: h = layer0(x0)
-          layer l>=1: h = layerl(concat([x0, h]))
+        x: (B, F_in) -> y: (B, 1), complex
         """
-        x0 = x
-        h = self.symbolic_layers[0](x0)
-
-        x0_c = x0.to(h.dtype)
-        for layer in self.symbolic_layers[1:]:
-            layer_in = torch.cat([x0_c, h], dim=1)
-            h = layer(layer_in)
-
-        assembly_in = torch.cat([x0_c, h], dim=1)
-        y = self.assembly_layer(assembly_in)
+        for layer in self.symbolic_layers:
+            x = layer(x)
+        y = self.assembly_layer(x)
         return y
