@@ -62,13 +62,19 @@ class ModelTrainingConfig:
     pruning_period_phase1 = 1000
     pruning_threshold_phase1 = 1e-2
 
-    pruning_start_epoch_phase2 = 10000
+    pruning_start_epoch_phase2 = 5000
     pruning_period_phase2 = 1000
     pruning_threshold_phase2 = 1e-2
 
     pruning_start_epoch_phase3 = 0
     pruning_period_phase3 = 1000
     pruning_threshold_phase3 = 1e-2
+
+    pruning_min_edges_total = 20
+
+    pruning_fraction_phase1 = 0.0
+    pruning_fraction_phase2 = 0.2
+    pruning_fraction_phase3 = 0.0
 
     # -------------------------
     # Division normalization

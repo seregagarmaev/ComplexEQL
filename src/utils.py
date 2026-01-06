@@ -172,9 +172,14 @@ def train_one_epoch(
 
     # pruning by amplitude (|w|) if requested
     if prune_now and prune_threshold > 0.0:
+        before = model.count_active_edges()
         pruned = model.cascade_threshold_prunning(threshold=prune_threshold, eps=1e-12)
+        after = model.count_active_edges()
         if pruned > 0:
-            print(f"[prune] Epoch {epoch}: pruned {pruned} edges (cascade, |w| < {prune_threshold:g})")
+            print(
+                f"[prune] Epoch {epoch}: pruned {pruned} edges "
+                f"(thr={prune_threshold:g}, active {before}->{after})"
+            )
 
     # normalize division mixing once per epoch
     if normalize_divisions:
@@ -224,15 +229,29 @@ def train(
         pruning_start_epoch: int,
         pruning_period: int,
         pruning_threshold: float,
+        pruning_fraction: float,
+        pruning_min_edges_total: int,
     ):
         nonlocal global_epoch, sl0_weights, sl1_weights, al_weights, data_losses, imag_w_losses
         nonlocal opt, sch
 
         for e in range(num_epochs):
             prune_now = False
-            if pruning_enabled and pruning_threshold > 0.0:
+            if pruning_enabled:
                 if e >= pruning_start_epoch and (e - pruning_start_epoch) % pruning_period == 0:
                     prune_now = True
+
+            prune_threshold_dynamic = 0.0
+            if prune_now:
+                thr, k_prune, active = model.pruning_threshold_from_fraction(
+                    pruning_fraction,
+                    min_edges_total=pruning_min_edges_total,
+                    eps=1e-12,
+                )
+                if thr is None:
+                    prune_now = False
+                else:
+                    prune_threshold_dynamic = thr
 
             avg_total, avg_data, _avg_reg, avg_real_reg, avg_imag_w_reg = train_one_epoch(
                 epoch=global_epoch,
@@ -253,7 +272,7 @@ def train(
                 imag_weights_penalty_coeff=imag_coeff if imag_enabled else 0.0,
                 # pruning
                 prune_now=prune_now,
-                prune_threshold=pruning_threshold if prune_now else 0.0,
+                prune_threshold=prune_threshold_dynamic if prune_now else 0.0,
                 # division normalization
                 normalize_divisions=cfg.normalize_divisions,
                 normalize_divisions_eps=cfg.normalize_divisions_eps,
@@ -297,6 +316,8 @@ def train(
         pruning_start_epoch=cfg.pruning_start_epoch_phase1,
         pruning_period=cfg.pruning_period_phase1,
         pruning_threshold=cfg.pruning_threshold_phase1,
+        pruning_fraction=cfg.pruning_fraction_phase1,
+        pruning_min_edges_total=cfg.pruning_min_edges_total,
     )
 
     # --------------------------
@@ -314,6 +335,8 @@ def train(
         pruning_start_epoch=cfg.pruning_start_epoch_phase2,
         pruning_period=cfg.pruning_period_phase2,
         pruning_threshold=cfg.pruning_threshold_phase2,
+        pruning_fraction=cfg.pruning_fraction_phase2,
+        pruning_min_edges_total=cfg.pruning_min_edges_total,
     )
 
     # --------------------------
@@ -331,6 +354,8 @@ def train(
         pruning_start_epoch=cfg.pruning_start_epoch_phase3,
         pruning_period=cfg.pruning_period_phase3,
         pruning_threshold=cfg.pruning_threshold_phase3,
+        pruning_fraction=cfg.pruning_fraction_phase3,
+        pruning_min_edges_total=cfg.pruning_min_edges_total,
     )
 
     return model, (sl0_weights, sl1_weights, al_weights, imag_w_losses, data_losses)

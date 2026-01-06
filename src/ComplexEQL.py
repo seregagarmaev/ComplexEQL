@@ -556,6 +556,83 @@ class ComplexEQL(nn.Module):
 
         return weights_list
 
+    @torch.no_grad()
+    def count_active_edges(self) -> int:
+        """
+        Number of currently non-pruned edges across the entire graph
+        (symbolic mixing edges + assembly edges), as defined by masks.
+        """
+        total = 0
+        for layer in self.symbolic_layers:
+            total += int((layer.mask > 0.5).sum().item())
+        total += int((self.assembly_layer.mask > 0.5).sum().item())
+        return total
+    
+    @torch.no_grad()
+    def pruning_threshold_from_fraction(
+        self,
+        fraction: float,
+        *,
+        min_edges_total: int,
+        eps: float = 1e-12,
+    ) -> tuple[float | None, int, int]:
+        """
+        Compute a magnitude threshold so that approximately `fraction` of the
+        currently active edges are pruned (smallest magnitudes), but never
+        reduce the total active edges below `min_edges_total`.
+
+        Returns:
+            (threshold | None, k_to_prune, active_edges)
+
+        Notes:
+        - We compute the k-th smallest magnitude among ACTIVE edges.
+        - We use nextafter(kth, +inf) so that edges with |w| == kth are also pruned
+          by your strict '< threshold' logic inside cascade_threshold_prunning().
+        """
+        fraction = float(fraction)
+        if fraction <= 0.0:
+            active = self.count_active_edges()
+            return (None, 0, active)
+
+        active = self.count_active_edges()
+        if active <= int(min_edges_total):
+            return (None, 0, active)
+
+        # collect magnitudes of ACTIVE edges only
+        mags_list: list[torch.Tensor] = []
+        for layer in self.symbolic_layers:
+            m = (layer.mask > 0.5)
+            if m.any():
+                mags_list.append(layer.weights.abs()[m].reshape(-1))
+        mA = (self.assembly_layer.mask > 0.5)
+        if mA.any():
+            mags_list.append(self.assembly_layer.weights.abs()[mA].reshape(-1))
+
+        if not mags_list:
+            return (None, 0, active)
+
+        mags = torch.cat(mags_list, dim=0)
+        n = int(mags.numel())
+
+        # target prune count, but capped so we never go below min_edges_total
+        k_target = int(np.floor(fraction * n))
+        k_cap = n - int(min_edges_total)
+        k_to_prune = max(0, min(k_target, k_cap))
+
+        if k_to_prune <= 0:
+            return (None, 0, active)
+
+        # kthvalue is 1-indexed
+        kth = torch.kthvalue(mags, k_to_prune).values
+
+        # ensure we prune weights with magnitude == kth as well
+        inf = torch.tensor(float("inf"), device=kth.device, dtype=kth.dtype)
+        thr = torch.nextafter(kth, inf)
+
+        # also respect eps (your cascade uses max(threshold, eps))
+        thr_val = float(max(float(thr.item()), float(eps)))
+        return (thr_val, k_to_prune, active)
+    
     def prune_by_threshold(self, threshold: float) -> int:
         total = 0
         for layer in self.symbolic_layers:
