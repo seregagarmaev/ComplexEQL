@@ -136,13 +136,13 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
         pred = model(X)
 
-        if clamp_pred:
-            pred = torch.complex(
-                torch.clamp(pred.real, -clamp_limit, clamp_limit),
-                torch.clamp(pred.imag, -clamp_limit, clamp_limit),
-            )
+        # if clamp_pred:
+        #     pred = torch.complex(
+        #         torch.clamp(pred.real, -clamp_limit, clamp_limit),
+        #         torch.clamp(pred.imag, -clamp_limit, clamp_limit),
+        #     )
 
-        data_loss = loss_fn(pred, y)
+        data_loss = loss_fn(pred.real, y)
 
         # ----------------- L1L0 sparsity -----------------
         if l1l0_enabled and l1l0_coeff > 0.0:
