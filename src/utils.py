@@ -73,6 +73,16 @@ def l1l0_smooth(
     penalty = ((alpha + 1.0) * smooth_abs) / (alpha + smooth_abs + eps)
     return torch.sum(penalty)
 
+# def l1_penalty(
+#     input_tensor: torch.Tensor | Iterable[torch.Tensor],
+# ) -> torch.Tensor:
+#     """
+#     Returns sum(|x|) over the given tensor(s).
+#     Works for real or complex tensors (torch.abs for complex gives magnitude).
+#     """
+#     if isinstance(input_tensor, (list, tuple)):
+#         return sum(l1_penalty(t) for t in input_tensor)
+#     return torch.abs(input_tensor).sum()
 
 # -------------------------
 # Train one epoch
@@ -104,6 +114,8 @@ def train_one_epoch(
     # output clamp
     clamp_pred: bool = True,
     clamp_limit: float = 1e15,
+    imag_shrink_enabled: bool = False,
+    imag_shrink_coeff: float = 1.0,
 ):
     model.train()
     device = torch.device(device)
@@ -146,6 +158,31 @@ def train_one_epoch(
             )
         else:
             real_reg = torch.tensor(0.0, device=device)
+        # # ----------------- L1 sparsity -----------------
+        # if l1l0_enabled and l1l0_coeff > 0.0:
+        #     if l1l0_use_real_only:
+        #         reg_target = model.get_real_weights_list()  # list of real tensors
+        #         real_reg_raw = l1_penalty(reg_target)
+        #     else:
+        #         # Option A (recommended): L1 on complex magnitudes using the model parameters directly
+        #         # (avoid sqrt(r^2+i^2) yourself; abs handles complex)
+        #         reg_target = []
+        #         for layer in model.symbolic_layers:
+        #             w_eff = layer.weights * layer.mask.to(layer.weights.dtype)
+        #             reg_target.append(w_eff.reshape(-1))
+        #         w_eff = model.assembly_layer.weights * model.assembly_layer.mask.to(model.assembly_layer.weights.dtype)
+        #         reg_target.append(w_eff.reshape(-1))
+        #         real_reg_raw = l1_penalty(reg_target)
+
+        #         # Option B (your current style): L1 on per-edge magnitudes built from real/imag lists
+        #         # real_list = model.get_real_weights_list()
+        #         # imag_list = model.get_imag_weights_list()
+        #         # reg_target = [torch.sqrt(r**2 + i**2) for r, i in zip(real_list, imag_list)]
+        #         # real_reg_raw = l1_penalty(reg_target)
+
+        #     real_reg = l1l0_coeff * real_reg_raw
+        # else:
+        #     real_reg = torch.tensor(0.0, device=device)
 
         # ----------------- imag(weights) penalty -----------------
         if imag_weights_penalty_enabled and imag_weights_penalty_coeff > 0.0:
@@ -185,6 +222,10 @@ def train_one_epoch(
     if normalize_divisions:
         model.normalize_all_divisions_(eps=normalize_divisions_eps)
 
+    # forced shrink of imaginary parts once per epoch
+    if imag_shrink_enabled and imag_shrink_coeff < 1.0:
+        model.shrink_imag_weights_(coeff=imag_shrink_coeff)
+    
     denom = max(1, num_samples)
     return (
         total_loss / denom,
@@ -231,6 +272,8 @@ def train(
         pruning_threshold: float,
         pruning_fraction: float,
         pruning_min_edges_total: int,
+        imag_shrink_enabled: bool,
+        imag_shrink_coeff: float,
     ):
         nonlocal global_epoch, sl0_weights, sl1_weights, al_weights, data_losses, imag_w_losses
         nonlocal opt, sch
@@ -279,6 +322,8 @@ def train(
                 # clamp
                 clamp_pred=getattr(cfg, "clamp_pred", True),
                 clamp_limit=getattr(cfg, "clamp_limit", 1e15),
+                imag_shrink_enabled=imag_shrink_enabled,
+                imag_shrink_coeff=imag_shrink_coeff,
             )
 
             # Scheduler ONLY in Phase 3
@@ -318,6 +363,8 @@ def train(
         pruning_threshold=cfg.pruning_threshold_phase1,
         pruning_fraction=cfg.pruning_fraction_phase1,
         pruning_min_edges_total=cfg.pruning_min_edges_total,
+        imag_shrink_enabled=cfg.imag_shrink_enabled_phase1,
+        imag_shrink_coeff=cfg.imag_shrink_coeff_phase1,
     )
 
     # --------------------------
@@ -337,6 +384,8 @@ def train(
         pruning_threshold=cfg.pruning_threshold_phase2,
         pruning_fraction=cfg.pruning_fraction_phase2,
         pruning_min_edges_total=cfg.pruning_min_edges_total,
+        imag_shrink_enabled=cfg.imag_shrink_enabled_phase2,
+        imag_shrink_coeff=cfg.imag_shrink_coeff_phase2,
     )
 
     # --------------------------
@@ -356,6 +405,8 @@ def train(
         pruning_threshold=cfg.pruning_threshold_phase3,
         pruning_fraction=cfg.pruning_fraction_phase3,
         pruning_min_edges_total=cfg.pruning_min_edges_total,
+        imag_shrink_enabled=cfg.imag_shrink_enabled_phase3,
+        imag_shrink_coeff=cfg.imag_shrink_coeff_phase3,
     )
 
     return model, (sl0_weights, sl1_weights, al_weights, imag_w_losses, data_losses)

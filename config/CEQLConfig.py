@@ -18,9 +18,9 @@ class ModelTrainingConfig:
     # -------------------------
     # Phase control
     # -------------------------
-    phase1_epochs = 20000
-    phase2_epochs = 20000
-    phase3_epochs = 5000
+    phase1_epochs = 10000
+    phase2_epochs = 10000
+    phase3_epochs = 10000
     print_every = 100
 
     # -------------------------
@@ -37,7 +37,7 @@ class ModelTrainingConfig:
     l1l0_enabled_phase3 = False
 
     l1l0_real_reg_coeff_phase1 = 1e-3
-    l1l0_real_reg_coeff_phase2 = 1e-2
+    l1l0_real_reg_coeff_phase2 = 1e-3
     l1l0_real_reg_coeff_phase3 = 0.0
 
     # -------------------------
@@ -47,9 +47,20 @@ class ModelTrainingConfig:
     imag_weights_penalty_enabled_phase2 = True
     imag_weights_penalty_enabled_phase3 = True
 
-    imag_w_coeff_phase1 = 1e-1
-    imag_w_coeff_phase2 = 1e-1
-    imag_w_coeff_phase3 = 1e3
+    imag_w_coeff_phase1 = 1e-3
+    imag_w_coeff_phase2 = 1e-3
+    imag_w_coeff_phase3 = 1e-3
+
+    # -------------------------
+    # Imaginary forced shrink (per epoch)
+    # -------------------------
+    imag_shrink_enabled_phase1 = True
+    imag_shrink_enabled_phase2 = True
+    imag_shrink_enabled_phase3 = True
+
+    imag_shrink_coeff_phase1 = 0.999
+    imag_shrink_coeff_phase2 = 0.999
+    imag_shrink_coeff_phase3 = 0.999
 
     # -------------------------
     # Pruning (per phase)
@@ -58,12 +69,12 @@ class ModelTrainingConfig:
     pruning_enabled_phase2 = True
     pruning_enabled_phase3 = False
 
-    pruning_start_epoch_phase1 = 0
+    pruning_start_epoch_phase1 = 5000
     pruning_period_phase1 = 1000
-    pruning_threshold_phase1 = 1e-2
+    pruning_threshold_phase1 = 1e-3
 
     pruning_start_epoch_phase2 = 5000
-    pruning_period_phase2 = 1000
+    pruning_period_phase2 = 2000
     pruning_threshold_phase2 = 1e-2
 
     pruning_start_epoch_phase3 = 0
@@ -79,7 +90,7 @@ class ModelTrainingConfig:
     # -------------------------
     # Division normalization
     # -------------------------
-    normalize_divisions = True
+    normalize_divisions = False#True
     normalize_divisions_eps = 1e-12
 
     # -------------------------
@@ -109,36 +120,36 @@ class NomtoConfig:
             {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
             {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
         ],
-        [
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-            {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
-            {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
-            {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
-            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
-        ],
-        [
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-            {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
-            {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
-            {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
-            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
-        ],
+        # [
+        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+        #     {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
+        #     {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
+        #     {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
+        #     {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
+        #     {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+        #     {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+        #     {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
+        #     {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
+        #     {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
+        #     {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
+        #     {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
+        # ],
+        # [
+        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
+        #     {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
+        #     {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
+        #     {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
+        #     {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
+        #     {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+        #     {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
+        #     {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
+        #     {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
+        #     {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
+        #     {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
+        #     {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
+        # ],
     ]
 
     n_input_fields = 2
