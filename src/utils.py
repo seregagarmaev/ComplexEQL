@@ -73,6 +73,12 @@ def l1l0_smooth(
     penalty = ((alpha + 1.0) * smooth_abs) / (alpha + smooth_abs + eps)
     return torch.sum(penalty)
 
+def linear_schedule(epoch: int, start: float, end: float, warmup: int) -> float:
+    if warmup <= 0:
+        return float(end)
+    t = min(max(epoch, 0), warmup) / float(warmup)
+    return float(start + (end - start) * t)
+
 # def l1_penalty(
 #     input_tensor: torch.Tensor | Iterable[torch.Tensor],
 # ) -> torch.Tensor:
@@ -94,6 +100,7 @@ def train_one_epoch(
     loss_fn: Callable,
     optimizer: torch.optim.Optimizer,
     device: torch.device | str,
+    cfg,
     *,
     # L1L0
     l1l0_enabled: bool,
@@ -120,6 +127,17 @@ def train_one_epoch(
     model.train()
     device = torch.device(device)
 
+    use_sur = bool(getattr(cfg, "use_sin_surrogate", False))
+    if use_sur:
+        r_epoch = linear_schedule(
+            epoch,
+            cfg.sin_surrogate_r_start,
+            cfg.sin_surrogate_r_end,
+            cfg.sin_surrogate_warmup_epochs,
+        )
+    else:
+        r_epoch = None
+
     total_data_loss = 0.0
     total_reg_loss = 0.0
     total_real_reg_loss = 0.0
@@ -134,7 +152,8 @@ def train_one_epoch(
         y = y.to(device)
 
         optimizer.zero_grad(set_to_none=True)
-        pred = model(X)
+        # pred = model(X)
+        pred = model(X, r=r_epoch) if r_epoch is not None else model(X)
 
         # if clamp_pred:
         #     pred = torch.complex(
@@ -303,6 +322,7 @@ def train(
                 loss_fn=loss_fn,
                 optimizer=opt,
                 device=device,
+                cfg=cfg,
                 # L1L0 (constant alpha from config)
                 l1l0_enabled=l1l0_enabled,
                 l1l0_use_real_only=l1l0_use_real_only,
@@ -331,13 +351,33 @@ def train(
                 # ReduceLROnPlateau expects a metric
                 sch.step(avg_data)
 
+            # if (global_epoch + 1) % cfg.print_every == 0 or global_epoch == 0:
+            #     lr = opt.param_groups[0]["lr"]
+            #     print(
+            #         f"[{phase_name} | Epoch {global_epoch+1}] "
+            #         f"total={avg_total:.4e}, data={avg_data:.4e}, "
+            #         f"sparsity_reg={avg_real_reg:.4e}, imag_w={avg_imag_w_reg:.4e}, "
+            #         f"alpha={cfg.l1l0_alpha:.3e}, imag_coeff={imag_coeff:.3e}, lr={lr:.2e}"
+            #     )
             if (global_epoch + 1) % cfg.print_every == 0 or global_epoch == 0:
                 lr = opt.param_groups[0]["lr"]
+
+                if getattr(cfg, "use_sin_surrogate", False):
+                    r_print = linear_schedule(
+                        global_epoch,
+                        cfg.sin_surrogate_r_start,
+                        cfg.sin_surrogate_r_end,
+                        cfg.sin_surrogate_warmup_epochs,
+                    )
+                    r_str = f"{r_print:.4f}"
+                else:
+                    r_str = "NA"
+
                 print(
                     f"[{phase_name} | Epoch {global_epoch+1}] "
                     f"total={avg_total:.4e}, data={avg_data:.4e}, "
                     f"sparsity_reg={avg_real_reg:.4e}, imag_w={avg_imag_w_reg:.4e}, "
-                    f"alpha={cfg.l1l0_alpha:.3e}, imag_coeff={imag_coeff:.3e}, lr={lr:.2e}"
+                    f"alpha={cfg.l1l0_alpha:.3e}, r={r_str}, imag_coeff={imag_coeff:.3e}, lr={lr:.2e}"
                 )
 
             global_epoch += 1

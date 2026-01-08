@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 
 # Global clamp for all operator outputs
-CLAMP_VAL = 1e10
+CLAMP_VAL = 1e15
 
 
 def nan_to_num_complex(
@@ -83,16 +83,44 @@ def exponent_operation(x: torch.Tensor) -> torch.Tensor:
     return y.unsqueeze(-1)
 
 
-def sin_operation(x: torch.Tensor, damp_gamma: float, damp_p: float) -> torch.Tensor:
-    u = x.real
-    v = x.imag
-    eps = 1e-12
-    damp = torch.exp(-damp_gamma * torch.pow(v.abs() + eps, damp_p))
-    y_real = torch.sin(u) * damp
-    y = torch.complex(y_real, torch.zeros_like(y_real))
+# def sin_operation(x: torch.Tensor, damp_gamma: float, damp_p: float) -> torch.Tensor:
+#     u = x.real
+#     v = x.imag
+#     eps = 1e-12
+#     damp = torch.exp(-damp_gamma * torch.pow(v.abs() + eps, damp_p))
+#     y_real = torch.sin(u) * damp
+#     y = torch.complex(y_real, torch.zeros_like(y_real))
+#     y = _sanitize_out(y)
+#     return y.unsqueeze(-1)
+
+# # complex verison
+# def sin_operation_surrogate(x: torch.Tensor, r: float) -> torch.Tensor:
+#     u = x  # keep complex
+#     r = float(max(min(r, 1.0), 1e-12))
+
+#     log_r = torch.log(torch.tensor(r, device=u.device, dtype=u.real.dtype))
+
+#     phi = u.real * u.real + u.imag * u.imag
+#     damp = torch.exp(log_r * phi)          # real tensor
+#     y = damp.to(u.dtype) * torch.sin(u)    # complex tensor
+
+#     y = _sanitize_out(y)
+#     return y.unsqueeze(-1)
+
+# real version
+def sin_operation_surrogate(x: torch.Tensor, r: float) -> torch.Tensor:
+    u = x.real  # use only real part
+    r = float(max(min(r, 1.0), 1e-12))
+
+    log_r = torch.log(torch.tensor(r, device=u.device, dtype=u.dtype))
+
+    phi = u * u
+    damp = torch.exp(log_r * phi)          # real tensor
+    y_real = damp * torch.sin(u)           # real tensor
+
+    y = torch.complex(y_real, torch.zeros_like(y_real))  # complex with zero imag
     y = _sanitize_out(y)
     return y.unsqueeze(-1)
-
 
 def cos_operation(x: torch.Tensor, damp_gamma: float, damp_p: float) -> torch.Tensor:
     u = x.real
@@ -164,14 +192,30 @@ class UnarySurrogate(nn.Module):
         self.damp_gamma = damp_gamma
         self.damp_p = damp_p
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    # def forward(self, x: torch.Tensor, **runtime_kwargs) -> torch.Tensor:
+    # # def forward(self, x: torch.Tensor) -> torch.Tensor:
+    #     if self.stair_step_size is not None:
+    #         out = self.operation(x, self.stair_step_size)
+    #     elif self.damp_gamma is not None:
+    #         out = self.operation(x, self.damp_gamma, self.damp_p)
+    #     else:
+    #         # out = self.operation(x)
+    #         out = self.operation(x, **runtime_kwargs) if runtime_kwargs else self.operation(x)
+    #     return out  # (B,1)
+    def forward(self, x: torch.Tensor, **runtime_kwargs) -> torch.Tensor:
+        # Priority: explicit params that define the op's fixed signature
         if self.stair_step_size is not None:
             out = self.operation(x, self.stair_step_size)
-        elif self.damp_gamma is not None:
+            return out
+
+        if self.damp_gamma is not None:
             out = self.operation(x, self.damp_gamma, self.damp_p)
-        else:
-            out = self.operation(x)
-        return out  # (B,1)
+            return out
+
+        # Otherwise: allow runtime kwargs (e.g. r) for surrogate ops
+        if runtime_kwargs and self.fname in ("sin"):  # choose the correct name you use
+            return self.operation(x, **runtime_kwargs)
+        return self.operation(x)
 
 
 class BinarySurrogate(nn.Module):
@@ -219,10 +263,11 @@ def load_models(cfg, layer_idx: int):
             elif op == "exp":
                 model = UnarySurrogate(exponent_operation, cfg, op, optype)
             elif op == "sin":
-                model = UnarySurrogate(
-                    sin_operation, cfg, op, optype,
-                    damp_gamma=params["damp_gamma"], damp_p=params["damp_p"]
-                )
+                # model = UnarySurrogate(
+                #     sin_operation, cfg, op, optype,
+                #     damp_gamma=params["damp_gamma"], damp_p=params["damp_p"]
+                # )
+                model = UnarySurrogate(sin_operation_surrogate, cfg, op, optype)
             elif op == "cos":
                 model = UnarySurrogate(
                     cos_operation, cfg, op, optype,

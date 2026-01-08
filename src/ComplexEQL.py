@@ -330,7 +330,8 @@ class SymbolicLayer(nn.Module):
 
         return num_pruned
 
-    def apply_NOs(self, X: torch.Tensor) -> torch.Tensor:
+    def apply_NOs(self, X: torch.Tensor, *, r: float | None = None) -> torch.Tensor:
+    # def apply_NOs(self, X: torch.Tensor) -> torch.Tensor:
         """
         Apply unary operators channelwise and binary operators on pairs of channels.
 
@@ -341,7 +342,7 @@ class SymbolicLayer(nn.Module):
 
         # unary
         for i, unary_no in enumerate(self.unary_nos):
-            out = unary_no(X[:, i])  # (B,) -> (B,1)
+            out = unary_no(X[:, i], r=r)
             results.append(out)
 
         # binary
@@ -355,12 +356,14 @@ class SymbolicLayer(nn.Module):
 
         return torch.cat(results, dim=-1)
 
-    def forward(self, X: torch.Tensor) -> torch.Tensor:
+    def forward(self, X: torch.Tensor, *, r: float | None = None) -> torch.Tensor:
+    # def forward(self, X: torch.Tensor) -> torch.Tensor:
         """
         X: (B, F_in)  ->  (B, n_ops)
         """
         lifted = self.lift(X)        # (B, n_inputs), complex
-        out = self.apply_NOs(lifted) # (B, n_ops)
+        # out = self.apply_NOs(lifted) # (B, n_ops)
+        out = self.apply_NOs(lifted, r=r)
         return out
 
 
@@ -843,7 +846,8 @@ class ComplexEQL(nn.Module):
         w = self.assembly_layer.weights.data
         self.assembly_layer.weights.data = torch.complex(w.real, w.imag * coeff)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, *, r: float | None = None) -> torch.Tensor:
+    # def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         x: (B, F0) -> y: (B, 1), complex
 
@@ -852,12 +856,18 @@ class ComplexEQL(nn.Module):
           layer l>=1: h = layerl(concat([x0, h]))
         """
         x0 = x
-        h = self.symbolic_layers[0](x0)
+        # h = self.symbolic_layers[0](x0)
+
+        # x0_c = x0.to(h.dtype)
+        # for layer in self.symbolic_layers[1:]:
+        #     layer_in = torch.cat([x0_c, h], dim=1)
+        #     h = layer(layer_in)
+        h = self.symbolic_layers[0](x0, r=r)
 
         x0_c = x0.to(h.dtype)
         for layer in self.symbolic_layers[1:]:
             layer_in = torch.cat([x0_c, h], dim=1)
-            h = layer(layer_in)
+            h = layer(layer_in, r=r)
 
         assembly_in = torch.cat([x0_c, h], dim=1)
         y = self.assembly_layer(assembly_in)
