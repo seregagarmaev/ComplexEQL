@@ -83,7 +83,7 @@ def sin_operation_surrogate(x: torch.Tensor, *, r: float, **_) -> torch.Tensor:
     r = float(max(min(r, 1.0), 1e-12))
 
     log_r = torch.log(torch.tensor(r, device=u.device, dtype=u.dtype))
-    phi = u * u
+    phi = u.abs() # * u
     damp = torch.exp(log_r * phi)
     y_real = damp * torch.sin(u)
 
@@ -92,9 +92,17 @@ def sin_operation_surrogate(x: torch.Tensor, *, r: float, **_) -> torch.Tensor:
     return y.unsqueeze(-1)
 
 
-def cos_operation(x: torch.Tensor, **_) -> torch.Tensor:
-    # simple complex cos (no damping)
-    y = _sanitize_out(torch.cos(x))
+def cos_operation_surrogate(x: torch.Tensor, *, r: float, **_) -> torch.Tensor:
+    u = x.real
+    r = float(max(min(r, 1.0), 1e-12))
+
+    log_r = torch.log(torch.tensor(r, device=u.device, dtype=u.dtype))
+    phi = u.abs() # * u
+    damp = torch.exp(log_r * phi)
+    y_real = damp * torch.cos(u)
+
+    y = torch.complex(y_real, torch.zeros_like(y_real))
+    y = _sanitize_out(y)
     return y.unsqueeze(-1)
 
 
@@ -182,7 +190,7 @@ UNARY_OPS = {
     "log": log_operation,
     "exp": exponent_operation,
     "sin": sin_operation_surrogate,
-    "cos": cos_operation,
+    "cos": cos_operation_surrogate,
     "tan": tan_operation,
     "tanh": tanh_operation,
 }
