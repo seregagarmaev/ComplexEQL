@@ -105,8 +105,7 @@ class ModelTrainingConfig:
     op_param_schedules = {
         "sin": {"r": {"start": 0.5, "end": 1.0, "warmup_epochs": 1000}},
         "cos": {"r": {"start": 0.5, "end": 1.0, "warmup_epochs": 1000}},
-        # later:
-        # "tan": {"r": {"start": 0.5, "end": 1.0, "warmup_epochs": 1000}},
+        "tan": {"r": {"start": 0.5, "end": 1.0, "warmup_epochs": 1000}},
     }
     
     
