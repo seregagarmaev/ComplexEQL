@@ -99,97 +99,55 @@ class ModelTrainingConfig:
     clamp_pred = True
     clamp_limit = 1e15
 
-    use_sin_surrogate = True
+    # Control for trigonometric functions
+    use_op_params = True
 
-    sin_surrogate_r_start = 0.5
-    sin_surrogate_r_end = 1.0
-    sin_surrogate_warmup_epochs = 1000
+    op_param_schedules = {
+        "sin": {"r": {"start": 0.5, "end": 1.0, "warmup_epochs": 1000}},
+        # later:
+        # "cos": {"r": {"start": 0.5, "end": 1.0, "warmup_epochs": 1000}},
+        # "tan": {"r": {"start": 0.5, "end": 1.0, "warmup_epochs": 1000}},
+    }
     
     
 
 
-class NomtoConfig:
+class CEQLConfig:
     device = ModelTrainingConfig.device
     no_params_list = [
         [
-            # {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            # {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-            # {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-            # {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-            # {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            # {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            # {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-            # {"library_function": "tan", "library_function_type": "unary", "in_channels": 1, "damp_gamma": 1.0, "damp_p": 2.0},
-            # {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
-            # {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
-            # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
+            {"op": "id",    "type": "unary"},
+            {"op": "id",    "type": "unary"},
+            {"op": "const", "type": "unary"},
+            {"op": "square","type": "unary"},
+            {"op": "sqrt",  "type": "unary"},
+            {"op": "exp",   "type": "unary"},
+            {"op": "sin",   "type": "unary"},
+            {"op": "cos",   "type": "unary"},
+            {"op": "log",   "type": "unary"},
+            {"op": "tan",   "type": "unary"},
+            {"op": "tanh",  "type": "unary"},
+            {"op": "mul",   "type": "binary"},
+            {"op": "div",   "type": "binary"},
         ],
-        # [
-        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-        #     # {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-        #     # {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-        #     # {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-        #     # {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-        #     # {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-        #     {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-        #     # {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-        #     # {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-        #     # {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
-        #     # {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
-        #     # {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
-        #     # {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
-        # ],
-        # [
-        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-        #     {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-        #     {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-        #     {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-        #     {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
-        #     {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
-        #     {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
-        #     {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
-        # ],
-        # [
-        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-        #     {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-        #     {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-        #     {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-        #     {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-        #     {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
-        #     {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
-        #     {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
-        #     {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
-        # ],
     ]
 
     n_input_fields = 2
     n_symbolic_layers = len(no_params_list)
 
     functions_dict = {
-        'x':      sp.Symbol('x'),
-        'id':     lambda x: x,
-        'const':  lambda x: sp.Integer(1),
-        'square': lambda x: x**2,
-        'cube':   lambda x: x**3,
-        'sqrt':   lambda x: sp.sqrt(x),
-        'exp':    lambda x: sp.exp(x),
-        'sin':    lambda x: sp.sin(x),
-        'cos':    lambda x: sp.cos(x),
-        'tan':    lambda x: sp.tan(x),
-        'tanh':   lambda x: sp.tanh(x),
-        'log':    lambda x: sp.log(x),
-        'mul':    lambda a, b: a * b,
-        'div':    lambda a, b: a / b,
-        'pow':    lambda a, b: a**b,
+        "x":      sp.Symbol("x"),
+        "id":     lambda x: x,
+        "const":  lambda x: sp.Integer(1),
+        "square": lambda x: x**2,
+        "cube":   lambda x: x**3,
+        "sqrt":   lambda x: sp.sqrt(x),
+        "exp":    lambda x: sp.exp(x),
+        "sin":    lambda x: sp.sin(x),
+        "cos":    lambda x: sp.cos(x),
+        "tan":    lambda x: sp.tan(x),
+        "tanh":   lambda x: sp.tanh(x),
+        "log":    lambda x: sp.log(x),
+        "mul":    lambda a, b: a * b,
+        "div":    lambda a, b: a / b,
     }

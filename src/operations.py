@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List
+from typing import Any, Dict, List, Optional
 import torch
 import torch.nn as nn
 
@@ -22,7 +22,9 @@ def nan_to_num_complex(
     return torch.nan_to_num(x, nan=nan, posinf=posinf, neginf=neginf)
 
 
-def clamp_complex(x: torch.Tensor, min_val: float = -CLAMP_VAL, max_val: float = CLAMP_VAL) -> torch.Tensor:
+def clamp_complex(
+    x: torch.Tensor, min_val: float = -CLAMP_VAL, max_val: float = CLAMP_VAL
+) -> torch.Tensor:
     if torch.is_complex(x):
         xr = torch.clamp(x.real, min_val, max_val)
         xi = torch.clamp(x.imag, min_val, max_val)
@@ -40,110 +42,70 @@ def _sanitize_out(y: torch.Tensor) -> torch.Tensor:
 # UNARY OPERATIONS
 # ======================
 
-def identity_operation(x: torch.Tensor) -> torch.Tensor:
-    y = x
-    y = _sanitize_out(y)
+def identity_operation(x: torch.Tensor, **_) -> torch.Tensor:
+    y = _sanitize_out(x)
     return y.unsqueeze(-1)
 
 
-def const_operation(x: torch.Tensor) -> torch.Tensor:
-    y = x * 0 + 1
-    y = _sanitize_out(y)
+def const_operation(x: torch.Tensor, **_) -> torch.Tensor:
+    y = _sanitize_out(x * 0 + 1)
     return y.unsqueeze(-1)
 
 
-def square_operation(x: torch.Tensor) -> torch.Tensor:
-    y = x * x
-    y = _sanitize_out(y)
+def square_operation(x: torch.Tensor, **_) -> torch.Tensor:
+    y = _sanitize_out(x * x)
     return y.unsqueeze(-1)
 
 
-def cube_operation(x: torch.Tensor) -> torch.Tensor:
-    y = x * x * x
-    y = _sanitize_out(y)
+def cube_operation(x: torch.Tensor, **_) -> torch.Tensor:
+    y = _sanitize_out(x * x * x)
     return y.unsqueeze(-1)
 
 
-def sqrt_operation(x: torch.Tensor) -> torch.Tensor:
-    y = torch.sqrt(x)
-    y = _sanitize_out(y)
+def sqrt_operation(x: torch.Tensor, **_) -> torch.Tensor:
+    y = _sanitize_out(torch.sqrt(x))
     return y.unsqueeze(-1)
 
 
-def log_operation(x: torch.Tensor, stair_step_size: float) -> torch.Tensor:
-    # stair_step_size kept for interface compatibility; unused
-    y = torch.log(x)
-    y = _sanitize_out(y)
+def log_operation(x: torch.Tensor, **_) -> torch.Tensor:
+    y = _sanitize_out(torch.log(x))
     return y.unsqueeze(-1)
 
 
-def exponent_operation(x: torch.Tensor) -> torch.Tensor:
-    y = torch.exp(x)
-    y = _sanitize_out(y)
+def exponent_operation(x: torch.Tensor, **_) -> torch.Tensor:
+    y = _sanitize_out(torch.exp(x))
     return y.unsqueeze(-1)
 
 
-# def sin_operation(x: torch.Tensor, damp_gamma: float, damp_p: float) -> torch.Tensor:
-#     u = x.real
-#     v = x.imag
-#     eps = 1e-12
-#     damp = torch.exp(-damp_gamma * torch.pow(v.abs() + eps, damp_p))
-#     y_real = torch.sin(u) * damp
-#     y = torch.complex(y_real, torch.zeros_like(y_real))
-#     y = _sanitize_out(y)
-#     return y.unsqueeze(-1)
-
-# # complex verison
-# def sin_operation_surrogate(x: torch.Tensor, r: float) -> torch.Tensor:
-#     u = x  # keep complex
-#     r = float(max(min(r, 1.0), 1e-12))
-
-#     log_r = torch.log(torch.tensor(r, device=u.device, dtype=u.real.dtype))
-
-#     phi = u.real * u.real + u.imag * u.imag
-#     damp = torch.exp(log_r * phi)          # real tensor
-#     y = damp.to(u.dtype) * torch.sin(u)    # complex tensor
-
-#     y = _sanitize_out(y)
-#     return y.unsqueeze(-1)
-
-# real version
-def sin_operation_surrogate(x: torch.Tensor, r: float) -> torch.Tensor:
-    u = x.real  # use only real part
+# real version (as you currently use): consumes only real part, returns complex with zero imag
+def sin_operation_surrogate(x: torch.Tensor, *, r: float, **_) -> torch.Tensor:
+    u = x.real
     r = float(max(min(r, 1.0), 1e-12))
 
     log_r = torch.log(torch.tensor(r, device=u.device, dtype=u.dtype))
-
     phi = u * u
-    damp = torch.exp(log_r * phi)          # real tensor
-    y_real = damp * torch.sin(u)           # real tensor
+    damp = torch.exp(log_r * phi)
+    y_real = damp * torch.sin(u)
 
-    y = torch.complex(y_real, torch.zeros_like(y_real))  # complex with zero imag
-    y = _sanitize_out(y)
-    return y.unsqueeze(-1)
-
-def cos_operation(x: torch.Tensor, damp_gamma: float, damp_p: float) -> torch.Tensor:
-    u = x.real
-    v = x.imag
-    eps = 1e-12
-    damp = torch.exp(-damp_gamma * torch.pow(v.abs() + eps, damp_p))
-    y_real = torch.cos(u) * damp
     y = torch.complex(y_real, torch.zeros_like(y_real))
     y = _sanitize_out(y)
     return y.unsqueeze(-1)
 
 
-def tan_operation(x: torch.Tensor, stair_step_size: float) -> torch.Tensor:
-    # stair_step_size kept for interface compatibility; unused
-    y = torch.tan(x)
-    y = _sanitize_out(y)
+def cos_operation(x: torch.Tensor, **_) -> torch.Tensor:
+    # simple complex cos (no damping)
+    y = _sanitize_out(torch.cos(x))
     return y.unsqueeze(-1)
 
 
-def tanh_operation(x: torch.Tensor, stair_step_size: float) -> torch.Tensor:
-    # stair_step_size kept for interface compatibility; unused
-    y = torch.tanh(x)
-    y = _sanitize_out(y)
+def tan_operation(x: torch.Tensor, **_) -> torch.Tensor:
+    # simple complex tan (no stair/damping)
+    y = _sanitize_out(torch.tan(x))
+    return y.unsqueeze(-1)
+
+
+def tanh_operation(x: torch.Tensor, **_) -> torch.Tensor:
+    y = _sanitize_out(torch.tanh(x))
     return y.unsqueeze(-1)
 
 
@@ -151,148 +113,111 @@ def tanh_operation(x: torch.Tensor, stair_step_size: float) -> torch.Tensor:
 # BINARY OPERATIONS
 # ======================
 
-def multiplication_operation(x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
-    y = x1 * x2
-    y = _sanitize_out(y)
+def multiplication_operation(x1: torch.Tensor, x2: torch.Tensor, **_) -> torch.Tensor:
+    y = _sanitize_out(x1 * x2)
     return y.unsqueeze(-1)
 
 
-def div_operation(x1: torch.Tensor, x2: torch.Tensor, stair_step_size: float) -> torch.Tensor:
-    # stair_step_size kept for interface compatibility; unused
-    y = x1 / x2
-    y = _sanitize_out(y)
+def div_operation(x1: torch.Tensor, x2: torch.Tensor, **_) -> torch.Tensor:
+    y = _sanitize_out(x1 / x2)
     return y.unsqueeze(-1)
 
 
-def power_operation(x1: torch.Tensor, x2: torch.Tensor, stair_step_size: float | None = None) -> torch.Tensor:
-    # stair_step_size kept for interface compatibility; unused
-    y = x1 ** x2
-    y = _sanitize_out(y)
+def power_operation(x1: torch.Tensor, x2: torch.Tensor, **_) -> torch.Tensor:
+    y = _sanitize_out(x1 ** x2)
     return y.unsqueeze(-1)
+
+
+# ======================
+# OP WRAPPERS
+# ======================
+
+OpParams = Dict[str, Dict[str, Any]]  # e.g. {"sin": {"r": 0.8}, "cos": {"r": 0.9}}
 
 
 class UnarySurrogate(nn.Module):
-    """Wrap an exact unary operation (no learnable params here)."""
-    def __init__(
-        self,
-        operation,
-        cfg,
-        fname,
-        ftype,
-        stair_step_size: float | None = None,
-        damp_gamma: float | None = None,
-        damp_p: float | None = None,
-    ):
+    """
+    Wrap an exact unary operation (no learnable params).
+    Routes op-specific runtime kwargs via `op_params[fname]`.
+    """
+    def __init__(self, operation, cfg, fname: str):
         super().__init__()
         self.operation = operation
         self.cfg = cfg
         self.fname = fname
-        self.ftype = ftype
-        self.stair_step_size = stair_step_size
-        self.damp_gamma = damp_gamma
-        self.damp_p = damp_p
+        self.ftype = "unary"
 
-    # def forward(self, x: torch.Tensor, **runtime_kwargs) -> torch.Tensor:
-    # # def forward(self, x: torch.Tensor) -> torch.Tensor:
-    #     if self.stair_step_size is not None:
-    #         out = self.operation(x, self.stair_step_size)
-    #     elif self.damp_gamma is not None:
-    #         out = self.operation(x, self.damp_gamma, self.damp_p)
-    #     else:
-    #         # out = self.operation(x)
-    #         out = self.operation(x, **runtime_kwargs) if runtime_kwargs else self.operation(x)
-    #     return out  # (B,1)
-    def forward(self, x: torch.Tensor, **runtime_kwargs) -> torch.Tensor:
-        # Priority: explicit params that define the op's fixed signature
-        if self.stair_step_size is not None:
-            out = self.operation(x, self.stair_step_size)
-            return out
-
-        if self.damp_gamma is not None:
-            out = self.operation(x, self.damp_gamma, self.damp_p)
-            return out
-
-        # Otherwise: allow runtime kwargs (e.g. r) for surrogate ops
-        if runtime_kwargs and self.fname in ("sin"):  # choose the correct name you use
-            return self.operation(x, **runtime_kwargs)
-        return self.operation(x)
+    def forward(self, x: torch.Tensor, *, op_params: Optional[OpParams] = None) -> torch.Tensor:
+        kwargs = (op_params or {}).get(self.fname, {})
+        return self.operation(x, **kwargs)  # operation decides what it needs
 
 
 class BinarySurrogate(nn.Module):
-    """Wrap an exact binary operation."""
-    def __init__(self, operation, cfg, fname, ftype, stair_step_size: float | None = None):
+    """
+    Wrap an exact binary operation (no learnable params).
+    Routes op-specific runtime kwargs via `op_params[fname]`.
+    """
+    def __init__(self, operation, cfg, fname: str):
         super().__init__()
         self.operation = operation
         self.cfg = cfg
         self.fname = fname
-        self.ftype = ftype
-        self.stair_step_size = stair_step_size
+        self.ftype = "binary"
 
-    def forward(self, X: torch.Tensor) -> torch.Tensor:
-        if self.stair_step_size is not None:
-            out = self.operation(X[:, 0], X[:, 1], self.stair_step_size)
-        else:
-            out = self.operation(X[:, 0], X[:, 1])
-        return out  # (B,1)
+    def forward(self, X: torch.Tensor, *, op_params: Optional[OpParams] = None) -> torch.Tensor:
+        kwargs = (op_params or {}).get(self.fname, {})
+        return self.operation(X[:, 0], X[:, 1], **kwargs)  # (B,1)
+
+
+# ======================
+# MODEL LOADING
+# ======================
+
+UNARY_OPS = {
+    "id": identity_operation,
+    "const": const_operation,
+    "square": square_operation,
+    "cube": cube_operation,
+    "sqrt": sqrt_operation,
+    "log": log_operation,
+    "exp": exponent_operation,
+    "sin": sin_operation_surrogate,
+    "cos": cos_operation,
+    "tan": tan_operation,
+    "tanh": tanh_operation,
+}
+
+BINARY_OPS = {
+    "mul": multiplication_operation,
+    "div": div_operation,
+    "pow": power_operation,  # include if you later add {"op":"pow","type":"binary"}
+}
 
 
 def load_models(cfg, layer_idx: int):
-    unary_nos = []
-    binary_nos = []
+    """
+    Expects cfg.no_params_list[layer_idx] like:
+      [{"op":"sin","type":"unary"}, {"op":"div","type":"binary"}, ...]
+    """
+    unary_nos: list[nn.Module] = []
+    binary_nos: list[nn.Module] = []
 
-    params_list = cfg.no_params_list[layer_idx]
+    specs = cfg.no_params_list[layer_idx]
+    for spec in specs:
+        op = spec["op"]
+        typ = spec["type"]
 
-    for params in params_list:
-        op = params["library_function"]
-        optype = params["library_function_type"]
-        stair_step_size = params.get("stair_step_size", None)
+        if typ == "unary":
+            if op not in UNARY_OPS:
+                raise ValueError(f"Unknown unary op '{op}'")
+            unary_nos.append(UnarySurrogate(UNARY_OPS[op], cfg, op))
 
-        if optype == "unary":
-            if op == "id":
-                model = UnarySurrogate(identity_operation, cfg, op, optype)
-            elif op == "const":
-                model = UnarySurrogate(const_operation, cfg, op, optype)
-            elif op == "square":
-                model = UnarySurrogate(square_operation, cfg, op, optype)
-            elif op == "cube":
-                model = UnarySurrogate(cube_operation, cfg, op, optype)
-            elif op == "sqrt":
-                model = UnarySurrogate(sqrt_operation, cfg, op, optype)
-            elif op == "log":
-                model = UnarySurrogate(log_operation, cfg, op, optype, stair_step_size=stair_step_size)
-            elif op == "exp":
-                model = UnarySurrogate(exponent_operation, cfg, op, optype)
-            elif op == "sin":
-                # model = UnarySurrogate(
-                #     sin_operation, cfg, op, optype,
-                #     damp_gamma=params["damp_gamma"], damp_p=params["damp_p"]
-                # )
-                model = UnarySurrogate(sin_operation_surrogate, cfg, op, optype)
-            elif op == "cos":
-                model = UnarySurrogate(
-                    cos_operation, cfg, op, optype,
-                    damp_gamma=params["damp_gamma"], damp_p=params["damp_p"]
-                )
-            elif op == "tan":
-                model = UnarySurrogate(tan_operation, cfg, op, optype, stair_step_size=stair_step_size)
-            elif op == "tanh":
-                model = UnarySurrogate(tanh_operation, cfg, op, optype, stair_step_size=stair_step_size)
-            else:
-                raise ValueError(f"Unknown exact unary operation '{op}'")
-            unary_nos.append(model)
-
-        elif optype == "binary":
-            if op == "mul":
-                model = BinarySurrogate(multiplication_operation, cfg, op, optype)
-            elif op == "div":
-                model = BinarySurrogate(div_operation, cfg, op, optype, stair_step_size=stair_step_size)
-            elif op == "pow":
-                model = BinarySurrogate(power_operation, cfg, op, optype, stair_step_size=stair_step_size)
-            else:
-                raise ValueError(f"Unknown exact binary operation '{op}'")
-            binary_nos.append(model)
+        elif typ == "binary":
+            if op not in BINARY_OPS:
+                raise ValueError(f"Unknown binary op '{op}'")
+            binary_nos.append(BinarySurrogate(BINARY_OPS[op], cfg, op))
 
         else:
-            raise ValueError(f"Unknown library_function_type '{optype}'")
+            raise ValueError(f"Unknown op type '{typ}' (op='{op}')")
 
     return unary_nos, binary_nos

@@ -3,11 +3,14 @@ from __future__ import annotations
 import os
 import random
 import time
-from typing import Callable, Iterable
+from typing import Any, Callable, Dict, Iterable, Optional
 
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader
+
+from src.operations import OpParams
 
 
 # -------------------------
@@ -35,6 +38,49 @@ def timeit(func: Callable) -> Callable:
         return result
 
     return wrapper
+
+
+# -------------------------
+# Schedules / op-params
+# -------------------------
+def linear_schedule(epoch: int, start: float, end: float, warmup: int) -> float:
+    if warmup <= 0:
+        return float(end)
+    t = min(max(epoch, 0), warmup) / float(warmup)
+    return float(start + (end - start) * t)
+
+
+def build_op_params(epoch: int, cfg) -> Optional[OpParams]:
+    if not bool(getattr(cfg, "use_op_params", False)):
+        return None
+
+    schedules: Dict[str, Dict[str, Dict[str, Any]]] = getattr(cfg, "op_param_schedules", {}) or {}
+    if not schedules:
+        return None
+
+    op_params: OpParams = {}
+
+    for opname, params in schedules.items():
+        if not isinstance(params, dict):
+            continue
+
+        op_kwargs: Dict[str, Any] = {}
+        for pname, spec in params.items():
+            if not isinstance(spec, dict):
+                continue
+            start = spec.get("start", None)
+            end = spec.get("end", None)
+            warmup = spec.get("warmup_epochs", 0)
+
+            if start is None or end is None:
+                continue
+
+            op_kwargs[pname] = linear_schedule(epoch, float(start), float(end), int(warmup))
+
+        if op_kwargs:
+            op_params[opname] = op_kwargs
+
+    return op_params if op_params else None
 
 
 # -------------------------
@@ -73,22 +119,6 @@ def l1l0_smooth(
     penalty = ((alpha + 1.0) * smooth_abs) / (alpha + smooth_abs + eps)
     return torch.sum(penalty)
 
-def linear_schedule(epoch: int, start: float, end: float, warmup: int) -> float:
-    if warmup <= 0:
-        return float(end)
-    t = min(max(epoch, 0), warmup) / float(warmup)
-    return float(start + (end - start) * t)
-
-# def l1_penalty(
-#     input_tensor: torch.Tensor | Iterable[torch.Tensor],
-# ) -> torch.Tensor:
-#     """
-#     Returns sum(|x|) over the given tensor(s).
-#     Works for real or complex tensors (torch.abs for complex gives magnitude).
-#     """
-#     if isinstance(input_tensor, (list, tuple)):
-#         return sum(l1_penalty(t) for t in input_tensor)
-#     return torch.abs(input_tensor).sum()
 
 # -------------------------
 # Train one epoch
@@ -121,22 +151,14 @@ def train_one_epoch(
     # output clamp
     clamp_pred: bool = True,
     clamp_limit: float = 1e15,
+    # imag shrink
     imag_shrink_enabled: bool = False,
     imag_shrink_coeff: float = 1.0,
 ):
     model.train()
     device = torch.device(device)
 
-    use_sur = bool(getattr(cfg, "use_sin_surrogate", False))
-    if use_sur:
-        r_epoch = linear_schedule(
-            epoch,
-            cfg.sin_surrogate_r_start,
-            cfg.sin_surrogate_r_end,
-            cfg.sin_surrogate_warmup_epochs,
-        )
-    else:
-        r_epoch = None
+    op_params_epoch = build_op_params(epoch, cfg)
 
     total_data_loss = 0.0
     total_reg_loss = 0.0
@@ -152,18 +174,18 @@ def train_one_epoch(
         y = y.to(device)
 
         optimizer.zero_grad(set_to_none=True)
-        # pred = model(X)
-        pred = model(X, r=r_epoch) if r_epoch is not None else model(X)
 
-        # if clamp_pred:
-        #     pred = torch.complex(
-        #         torch.clamp(pred.real, -clamp_limit, clamp_limit),
-        #         torch.clamp(pred.imag, -clamp_limit, clamp_limit),
-        #     )
+        pred = model(X, op_params=op_params_epoch)
+
+        if clamp_pred:
+            pred = torch.complex(
+                torch.clamp(pred.real, -clamp_limit, clamp_limit),
+                torch.clamp(pred.imag, -clamp_limit, clamp_limit),
+            )
 
         data_loss = loss_fn(pred.real, y)
 
-        # ----------------- L1L0 sparsity -----------------
+        # L1L0 sparsity
         if l1l0_enabled and l1l0_coeff > 0.0:
             if l1l0_use_real_only:
                 reg_target = model.get_real_weights_list()
@@ -172,38 +194,11 @@ def train_one_epoch(
                 imag_list = model.get_imag_weights_list()
                 reg_target = [torch.sqrt(r**2 + i**2) for r, i in zip(real_list, imag_list)]
 
-            real_reg = l1l0_coeff * l1l0_penalty(
-                reg_target, alpha=l1l0_alpha, s=l1l0_s, eps=l1l0_eps
-            )
+            real_reg = l1l0_coeff * l1l0_penalty(reg_target, alpha=l1l0_alpha, s=l1l0_s, eps=l1l0_eps)
         else:
             real_reg = torch.tensor(0.0, device=device)
-        # # ----------------- L1 sparsity -----------------
-        # if l1l0_enabled and l1l0_coeff > 0.0:
-        #     if l1l0_use_real_only:
-        #         reg_target = model.get_real_weights_list()  # list of real tensors
-        #         real_reg_raw = l1_penalty(reg_target)
-        #     else:
-        #         # Option A (recommended): L1 on complex magnitudes using the model parameters directly
-        #         # (avoid sqrt(r^2+i^2) yourself; abs handles complex)
-        #         reg_target = []
-        #         for layer in model.symbolic_layers:
-        #             w_eff = layer.weights * layer.mask.to(layer.weights.dtype)
-        #             reg_target.append(w_eff.reshape(-1))
-        #         w_eff = model.assembly_layer.weights * model.assembly_layer.mask.to(model.assembly_layer.weights.dtype)
-        #         reg_target.append(w_eff.reshape(-1))
-        #         real_reg_raw = l1_penalty(reg_target)
 
-        #         # Option B (your current style): L1 on per-edge magnitudes built from real/imag lists
-        #         # real_list = model.get_real_weights_list()
-        #         # imag_list = model.get_imag_weights_list()
-        #         # reg_target = [torch.sqrt(r**2 + i**2) for r, i in zip(real_list, imag_list)]
-        #         # real_reg_raw = l1_penalty(reg_target)
-
-        #     real_reg = l1l0_coeff * real_reg_raw
-        # else:
-        #     real_reg = torch.tensor(0.0, device=device)
-
-        # ----------------- imag(weights) penalty -----------------
+        # imag(weights) penalty
         if imag_weights_penalty_enabled and imag_weights_penalty_coeff > 0.0:
             imag_list = model.get_imag_weights_list()
             imag_w_reg_raw = sum((w**2).sum() for w in imag_list)
@@ -226,25 +221,19 @@ def train_one_epoch(
         total_imag_w_reg_loss += imag_w_reg.item() * bs
         total_loss += loss.item() * bs
 
-    # pruning by amplitude (|w|) if requested
     if prune_now and prune_threshold > 0.0:
         before = model.count_active_edges()
         pruned = model.cascade_threshold_prunning(threshold=prune_threshold, eps=1e-12)
         after = model.count_active_edges()
         if pruned > 0:
-            print(
-                f"[prune] Epoch {epoch}: pruned {pruned} edges "
-                f"(thr={prune_threshold:g}, active {before}->{after})"
-            )
+            print(f"[prune] Epoch {epoch}: pruned {pruned} edges (thr={prune_threshold:g}, active {before}->{after})")
 
-    # normalize division mixing once per epoch
     if normalize_divisions:
         model.normalize_all_divisions_(eps=normalize_divisions_eps)
 
-    # forced shrink of imaginary parts once per epoch
     if imag_shrink_enabled and imag_shrink_coeff < 1.0:
         model.shrink_imag_weights_(coeff=imag_shrink_coeff)
-    
+
     denom = max(1, num_samples)
     return (
         total_loss / denom,
@@ -252,6 +241,7 @@ def train_one_epoch(
         total_reg_loss / denom,
         total_real_reg_loss / denom,
         total_imag_w_reg_loss / denom,
+        op_params_epoch,
     )
 
 
@@ -262,50 +252,45 @@ def train(
     loss_fn: Callable,
     cfg,
     device: torch.device | str,
-    scheduler=None,  # used ONLY in Phase 3 (e.g., ReduceLROnPlateau)
+    scheduler=None,
 ):
     device = torch.device(device)
     global_epoch = 0
 
-    sl0_weights, sl1_weights, al_weights = [], [], []
+    sl0_weights, al_weights = [], []
     data_losses, imag_w_losses = [], []
 
     opt = optimizer
-    sch = scheduler  # do not touch in phases 1/2
+    sch = scheduler
 
     def _run_phase(
         phase_name: str,
         num_epochs: int,
         *,
-        # L1L0
         l1l0_enabled: bool,
         l1l0_coeff: float,
         l1l0_use_real_only: bool,
-        # imag penalty
         imag_enabled: bool,
         imag_coeff: float,
-        # pruning
         pruning_enabled: bool,
         pruning_start_epoch: int,
         pruning_period: int,
-        pruning_threshold: float,
         pruning_fraction: float,
         pruning_min_edges_total: int,
         imag_shrink_enabled: bool,
         imag_shrink_coeff: float,
     ):
-        nonlocal global_epoch, sl0_weights, sl1_weights, al_weights, data_losses, imag_w_losses
+        nonlocal global_epoch, sl0_weights, al_weights, data_losses, imag_w_losses
         nonlocal opt, sch
 
         for e in range(num_epochs):
             prune_now = False
-            if pruning_enabled:
-                if e >= pruning_start_epoch and (e - pruning_start_epoch) % pruning_period == 0:
-                    prune_now = True
+            if pruning_enabled and (e >= pruning_start_epoch) and ((e - pruning_start_epoch) % pruning_period == 0):
+                prune_now = True
 
             prune_threshold_dynamic = 0.0
             if prune_now:
-                thr, k_prune, active = model.pruning_threshold_from_fraction(
+                thr, _k_prune, _active = model.pruning_threshold_from_fraction(
                     pruning_fraction,
                     min_edges_total=pruning_min_edges_total,
                     eps=1e-12,
@@ -315,7 +300,7 @@ def train(
                 else:
                     prune_threshold_dynamic = thr
 
-            avg_total, avg_data, _avg_reg, avg_real_reg, avg_imag_w_reg = train_one_epoch(
+            avg_total, avg_data, _avg_reg, avg_real_reg, avg_imag_w_reg, op_params_epoch = train_one_epoch(
                 epoch=global_epoch,
                 dataloader=dataloader,
                 model=model,
@@ -323,61 +308,39 @@ def train(
                 optimizer=opt,
                 device=device,
                 cfg=cfg,
-                # L1L0 (constant alpha from config)
                 l1l0_enabled=l1l0_enabled,
                 l1l0_use_real_only=l1l0_use_real_only,
                 l1l0_coeff=l1l0_coeff,
                 l1l0_alpha=cfg.l1l0_alpha,
                 l1l0_s=cfg.l1l0_s,
                 l1l0_eps=cfg.l1l0_eps,
-                # imag penalty (constant per phase)
                 imag_weights_penalty_enabled=imag_enabled,
                 imag_weights_penalty_coeff=imag_coeff if imag_enabled else 0.0,
-                # pruning
                 prune_now=prune_now,
                 prune_threshold=prune_threshold_dynamic if prune_now else 0.0,
-                # division normalization
                 normalize_divisions=cfg.normalize_divisions,
                 normalize_divisions_eps=cfg.normalize_divisions_eps,
-                # clamp
                 clamp_pred=getattr(cfg, "clamp_pred", True),
                 clamp_limit=getattr(cfg, "clamp_limit", 1e15),
                 imag_shrink_enabled=imag_shrink_enabled,
                 imag_shrink_coeff=imag_shrink_coeff,
             )
 
-            # Scheduler ONLY in Phase 3
             if (phase_name == "Phase 3") and (sch is not None):
-                # ReduceLROnPlateau expects a metric
                 sch.step(avg_data)
 
-            # if (global_epoch + 1) % cfg.print_every == 0 or global_epoch == 0:
-            #     lr = opt.param_groups[0]["lr"]
-            #     print(
-            #         f"[{phase_name} | Epoch {global_epoch+1}] "
-            #         f"total={avg_total:.4e}, data={avg_data:.4e}, "
-            #         f"sparsity_reg={avg_real_reg:.4e}, imag_w={avg_imag_w_reg:.4e}, "
-            #         f"alpha={cfg.l1l0_alpha:.3e}, imag_coeff={imag_coeff:.3e}, lr={lr:.2e}"
-            #     )
             if (global_epoch + 1) % cfg.print_every == 0 or global_epoch == 0:
                 lr = opt.param_groups[0]["lr"]
-
-                if getattr(cfg, "use_sin_surrogate", False):
-                    r_print = linear_schedule(
-                        global_epoch,
-                        cfg.sin_surrogate_r_start,
-                        cfg.sin_surrogate_r_end,
-                        cfg.sin_surrogate_warmup_epochs,
-                    )
-                    r_str = f"{r_print:.4f}"
-                else:
-                    r_str = "NA"
+                r_str = "NA"
+                if op_params_epoch and ("sin" in op_params_epoch) and ("r" in op_params_epoch["sin"]):
+                    r_str = f"{float(op_params_epoch['sin']['r']):.4f}"
 
                 print(
                     f"[{phase_name} | Epoch {global_epoch+1}] "
+                    f"lr={lr:.2e}, "
                     f"total={avg_total:.4e}, data={avg_data:.4e}, "
                     f"sparsity_reg={avg_real_reg:.4e}, imag_w={avg_imag_w_reg:.4e}, "
-                    f"alpha={cfg.l1l0_alpha:.3e}, r={r_str}, imag_coeff={imag_coeff:.3e}, lr={lr:.2e}"
+                    f"r={r_str}, imag_coeff={imag_coeff:.3e}"
                 )
 
             global_epoch += 1
@@ -386,9 +349,6 @@ def train(
             data_losses.append(avg_data)
             imag_w_losses.append(avg_imag_w_reg)
 
-    # --------------------------
-    # PHASE 1
-    # --------------------------
     _run_phase(
         "Phase 1",
         cfg.phase1_epochs,
@@ -400,16 +360,12 @@ def train(
         pruning_enabled=cfg.pruning_enabled_phase1,
         pruning_start_epoch=cfg.pruning_start_epoch_phase1,
         pruning_period=cfg.pruning_period_phase1,
-        pruning_threshold=cfg.pruning_threshold_phase1,
         pruning_fraction=cfg.pruning_fraction_phase1,
         pruning_min_edges_total=cfg.pruning_min_edges_total,
         imag_shrink_enabled=cfg.imag_shrink_enabled_phase1,
         imag_shrink_coeff=cfg.imag_shrink_coeff_phase1,
     )
 
-    # --------------------------
-    # PHASE 2
-    # --------------------------
     _run_phase(
         "Phase 2",
         cfg.phase2_epochs,
@@ -421,16 +377,12 @@ def train(
         pruning_enabled=cfg.pruning_enabled_phase2,
         pruning_start_epoch=cfg.pruning_start_epoch_phase2,
         pruning_period=cfg.pruning_period_phase2,
-        pruning_threshold=cfg.pruning_threshold_phase2,
         pruning_fraction=cfg.pruning_fraction_phase2,
         pruning_min_edges_total=cfg.pruning_min_edges_total,
         imag_shrink_enabled=cfg.imag_shrink_enabled_phase2,
         imag_shrink_coeff=cfg.imag_shrink_coeff_phase2,
     )
 
-    # --------------------------
-    # PHASE 3
-    # --------------------------
     _run_phase(
         "Phase 3",
         cfg.phase3_epochs,
@@ -442,11 +394,10 @@ def train(
         pruning_enabled=cfg.pruning_enabled_phase3,
         pruning_start_epoch=cfg.pruning_start_epoch_phase3,
         pruning_period=cfg.pruning_period_phase3,
-        pruning_threshold=cfg.pruning_threshold_phase3,
         pruning_fraction=cfg.pruning_fraction_phase3,
         pruning_min_edges_total=cfg.pruning_min_edges_total,
         imag_shrink_enabled=cfg.imag_shrink_enabled_phase3,
         imag_shrink_coeff=cfg.imag_shrink_coeff_phase3,
     )
 
-    return model, (sl0_weights, sl1_weights, al_weights, imag_w_losses, data_losses)
+    return model, (sl0_weights, al_weights, imag_w_losses, data_losses)
