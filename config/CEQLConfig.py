@@ -37,7 +37,7 @@ class ModelTrainingConfig:
     l1l0_enabled_phase3 = False
 
     l1l0_real_reg_coeff_phase1 = 1e-3
-    l1l0_real_reg_coeff_phase2 = 1e-3
+    l1l0_real_reg_coeff_phase2 = 1e-1
     l1l0_real_reg_coeff_phase3 = 0.0
 
     # -------------------------
@@ -54,8 +54,8 @@ class ModelTrainingConfig:
     # -------------------------
     # Imaginary forced shrink (per epoch)
     # -------------------------
-    imag_shrink_enabled_phase1 = True
-    imag_shrink_enabled_phase2 = True
+    imag_shrink_enabled_phase1 = False
+    imag_shrink_enabled_phase2 = False
     imag_shrink_enabled_phase3 = True
 
     imag_shrink_coeff_phase1 = 0.999

@@ -43,7 +43,9 @@ def _sanitize_out(y: torch.Tensor) -> torch.Tensor:
 # ======================
 
 def identity_operation(x: torch.Tensor, **_) -> torch.Tensor:
-    y = _sanitize_out(x)
+    y_real = x.real
+    y = torch.complex(y_real, torch.zeros_like(y_real))
+    y = _sanitize_out(y)
     return y.unsqueeze(-1)
 
 
@@ -53,27 +55,42 @@ def const_operation(x: torch.Tensor, **_) -> torch.Tensor:
 
 
 def square_operation(x: torch.Tensor, **_) -> torch.Tensor:
-    y = _sanitize_out(x * x)
+    u = x.real
+    y_real = u * u
+    y = torch.complex(y_real, torch.zeros_like(y_real))
+    y = _sanitize_out(y)
     return y.unsqueeze(-1)
 
 
 def cube_operation(x: torch.Tensor, **_) -> torch.Tensor:
-    y = _sanitize_out(x * x * x)
-    return y.unsqueeze(-1)
-
-
-def sqrt_operation(x: torch.Tensor, **_) -> torch.Tensor:
-    y = _sanitize_out(torch.sqrt(x))
+    u = x.real
+    y_real = u * u * u
+    y = torch.complex(y_real, torch.zeros_like(y_real))
+    y = _sanitize_out(y)
     return y.unsqueeze(-1)
 
 
 def log_operation(x: torch.Tensor, **_) -> torch.Tensor:
-    y = _sanitize_out(torch.log(x))
+    z = torch.log(x)
+    y_real = torch.abs(z)
+    y = torch.complex(y_real, torch.zeros_like(y_real))
+    y = _sanitize_out(y)
+    return y.unsqueeze(-1)
+
+
+def sqrt_operation(x: torch.Tensor, **_) -> torch.Tensor:
+    z = torch.sqrt(x)                # complex sqrt if x is complex
+    y_real = torch.abs(z)            # |sqrt(x)| as a real scalar field
+    y = torch.complex(y_real, torch.zeros_like(y_real))
+    y = _sanitize_out(y)
     return y.unsqueeze(-1)
 
 
 def exponent_operation(x: torch.Tensor, **_) -> torch.Tensor:
-    y = _sanitize_out(torch.exp(x))
+    u = x.real
+    y_real = torch.exp(u)
+    y = torch.complex(y_real, torch.zeros_like(y_real))
+    y = _sanitize_out(y)
     return y.unsqueeze(-1)
 
 
@@ -126,7 +143,10 @@ def tan_operation_surrogate(x: torch.Tensor, *, r: float, **_) -> torch.Tensor:
 
 
 def tanh_operation(x: torch.Tensor, **_) -> torch.Tensor:
-    y = _sanitize_out(torch.tanh(x))
+    u = x.real
+    y_real = torch.tanh(u)
+    y = torch.complex(y_real, torch.zeros_like(y_real))
+    y = _sanitize_out(y)
     return y.unsqueeze(-1)
 
 
@@ -135,17 +155,19 @@ def tanh_operation(x: torch.Tensor, **_) -> torch.Tensor:
 # ======================
 
 def multiplication_operation(x1: torch.Tensor, x2: torch.Tensor, **_) -> torch.Tensor:
-    y = _sanitize_out(x1 * x2)
+    a = x1.real
+    b = x2.real
+    y_real = a * b
+    y = torch.complex(y_real, torch.zeros_like(y_real))
+    y = _sanitize_out(y)
     return y.unsqueeze(-1)
 
 
 def div_operation(x1: torch.Tensor, x2: torch.Tensor, **_) -> torch.Tensor:
-    y = _sanitize_out(x1 / x2)
-    return y.unsqueeze(-1)
-
-
-def power_operation(x1: torch.Tensor, x2: torch.Tensor, **_) -> torch.Tensor:
-    y = _sanitize_out(x1 ** x2)
+    q = x1.real / x2
+    y_real = q.real
+    y = torch.complex(y_real, torch.zeros_like(y_real))
+    y = _sanitize_out(y)
     return y.unsqueeze(-1)
 
 
@@ -211,7 +233,6 @@ UNARY_OPS = {
 BINARY_OPS = {
     "mul": multiplication_operation,
     "div": div_operation,
-    "pow": power_operation,  # include if you later add {"op":"pow","type":"binary"}
 }
 
 
