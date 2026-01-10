@@ -13,23 +13,52 @@ from src.metrics import Metrics, compute_metrics
 @dataclass(frozen=True)
 class DatasetRecord:
     pid: str
-    X: np.ndarray
-    y: np.ndarray
+    X_train: np.ndarray
+    y_train: np.ndarray
+    X_test: np.ndarray
+    y_test: np.ndarray
     expr_gt: sp.Expr
 
 
+# def load_korns_hdf5(path: str) -> Dict[str, DatasetRecord]:
+#     out: Dict[str, DatasetRecord] = {}
+#     with h5py.File(path, "r") as f:
+#         for pid in f.keys():
+#             grp = f[pid]
+#             X = np.asarray(grp["X"][:], dtype=np.float64)
+#             y = np.asarray(grp["y"][:], dtype=np.float64).reshape(-1)
+#             if "expr_srepr" in grp.attrs:
+#                 expr_gt = sp.sympify(grp.attrs["expr_srepr"])
+#             else:
+#                 expr_gt = sp.sympify(grp.attrs["expr_str"])
+#             out[pid] = DatasetRecord(pid=pid, X=X, y=y, expr_gt=expr_gt)
+#     return out
 def load_korns_hdf5(path: str) -> Dict[str, DatasetRecord]:
     out: Dict[str, DatasetRecord] = {}
     with h5py.File(path, "r") as f:
         for pid in f.keys():
             grp = f[pid]
-            X = np.asarray(grp["X"][:], dtype=np.float64)
-            y = np.asarray(grp["y"][:], dtype=np.float64).reshape(-1)
+
+            X_train = np.asarray(grp["X_train"][:], dtype=np.float64)
+            y_train = np.asarray(grp["y_train"][:], dtype=np.float64).reshape(-1)
+
+            X_test = np.asarray(grp["X_extrap"][:], dtype=np.float64)
+            y_test = np.asarray(grp["y_extrap"][:], dtype=np.float64).reshape(-1)
+
+            # prefer srepr if present; else expr_str
             if "expr_srepr" in grp.attrs:
                 expr_gt = sp.sympify(grp.attrs["expr_srepr"])
             else:
                 expr_gt = sp.sympify(grp.attrs["expr_str"])
-            out[pid] = DatasetRecord(pid=pid, X=X, y=y, expr_gt=expr_gt)
+
+            out[pid] = DatasetRecord(
+                pid=pid,
+                X_train=X_train,
+                y_train=y_train,
+                X_test=X_test,
+                y_test=y_test,
+                expr_gt=expr_gt,
+            )
     return out
 
 
@@ -52,6 +81,7 @@ def train_test_split(
 @dataclass
 class SRFitResult:
     expr: Optional[sp.Expr]
+    y_pred_train: np.ndarray
     y_pred_test: np.ndarray
     metadata: Optional[Dict[str, Any]]
 
@@ -77,10 +107,19 @@ class BenchmarkRow:
     pid: str
     algo: str
     run_id: int
-    nlse: float
+
+    nlse_test: float
+    mse_test: float
+    mape_test: float
+
+    nlse_train: float
+    mse_train: float
+    mape_train: float
+
     term_precision: float
     term_recall: float
     term_f1: float
+
     expr_str: str
     expr_gt_str: str
     extra: Optional[Dict[str, Any]] = None
@@ -175,10 +214,8 @@ def run_benchmark(
         init_results_csv(results_csv_path, BenchmarkRow)
 
     for pid, rec in sorted(datasets.items(), key=lambda kv: int(kv[0][1:])):
-        split_seed = config.split_seed + config.per_problem_seed_offset + int(pid[1:])
-        X_train, X_test, y_train, y_test = train_test_split(
-            rec.X, rec.y, test_size=config.test_size, seed=split_seed
-        )
+        X_train, y_train = rec.X_train, rec.y_train
+        X_test, y_test = rec.X_test, rec.y_test
 
         print("=" * 50)
         print(f"[PROBLEM] {pid}")
@@ -200,28 +237,40 @@ def run_benchmark(
                 print(f"[RUN START] run_id={run_id} seed={run_seed}")
 
                 fit_res = algo.fit_predict(X_train, y_train, X_test)
+
                 m: Metrics = compute_metrics(
-                    y_true=y_test,
-                    y_pred=fit_res.y_pred_test,
+                    y_train_true=y_train,
+                    y_train_pred=fit_res.y_pred_train,
+                    y_test_true=y_test,
+                    y_test_pred=fit_res.y_pred_test,
                     expr_gt=rec.expr_gt,
                     expr_pred=fit_res.expr,
                     feature_names=feature_names,
                 )
-
+                
                 expr_pred = str(fit_res.expr) if fit_res.expr is not None else ""
                 print(f"[PRED] {expr_pred}")
-
+                
                 extra = dict(fit_res.metadata) if fit_res.metadata else {}
                 extra["run_seed"] = int(run_seed)
-
+                
                 row = BenchmarkRow(
                     pid=pid,
                     algo=algo.name,
                     run_id=run_id,
-                    nlse=m.nlse,
+                
+                    nlse_test=m.nlse_test,
+                    mse_test=m.mse_test,
+                    mape_test=m.mape_test,
+                
+                    nlse_train=m.nlse_train,
+                    mse_train=m.mse_train,
+                    mape_train=m.mape_train,
+                
                     term_precision=m.term_precision,
                     term_recall=m.term_recall,
                     term_f1=m.term_f1,
+                
                     expr_str=expr_pred,
                     expr_gt_str=str(rec.expr_gt),
                     extra=extra,

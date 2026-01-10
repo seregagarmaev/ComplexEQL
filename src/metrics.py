@@ -9,19 +9,46 @@ import sympy as sp
 
 @dataclass(frozen=True)
 class Metrics:
-    nlse: float
+    # --------
+    # Data-fit metrics (train/test)
+    # --------
+    nlse_test: float
+    mse_test: float
+    mape_test: float
+
+    nlse_train: float
+    mse_train: float
+    mape_train: float
+
+    # --------
+    # Expression-term metrics (structure)
+    # --------
     term_precision: float
     term_recall: float
     term_f1: float
+
+
+def mse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    y_true = np.asarray(y_true, dtype=np.float64).reshape(-1)
+    y_pred = np.asarray(y_pred, dtype=np.float64).reshape(-1)
+    err = y_true - y_pred
+    return float(np.mean(err**2))
 
 
 def nlse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     y_true = np.asarray(y_true, dtype=np.float64).reshape(-1)
     y_pred = np.asarray(y_pred, dtype=np.float64).reshape(-1)
     err = y_true - y_pred
-    mse = float(np.mean(err**2))
+    mse_val = float(np.mean(err**2))
     var = float(np.var(y_true))
-    return float(mse / var) if var > 0 else float("nan")
+    return float(mse_val / var) if var > 0 else float("nan")
+
+
+def mape(y_true: np.ndarray, y_pred: np.ndarray, eps: float = 1e-12) -> float:
+    y_true = np.asarray(y_true, dtype=np.float64).reshape(-1)
+    y_pred = np.asarray(y_pred, dtype=np.float64).reshape(-1)
+    denom = np.maximum(np.abs(y_true), eps)
+    return float(np.mean(np.abs((y_true - y_pred) / denom)) * 100.0)
 
 
 def _as_add_terms(expr: sp.Expr) -> Tuple[sp.Expr, ...]:
@@ -126,11 +153,23 @@ def term_precision_recall_f1(
 
 
 def compute_metrics(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
+    y_train_true: np.ndarray,
+    y_train_pred: np.ndarray,
+    y_test_true: np.ndarray,
+    y_test_pred: np.ndarray,
     expr_gt: sp.Expr,
     expr_pred: Optional[sp.Expr],
     feature_names: List[str],
 ) -> Metrics:
     p, r, f1 = term_precision_recall_f1(expr_gt, expr_pred, feature_names)
-    return Metrics(nlse=nlse(y_true, y_pred), term_precision=p, term_recall=r, term_f1=f1)
+    return Metrics(
+        nlse_test=nlse(y_test_true, y_test_pred),
+        mse_test=mse(y_test_true, y_test_pred),
+        mape_test=mape(y_test_true, y_test_pred),
+        nlse_train=nlse(y_train_true, y_train_pred),
+        mse_train=mse(y_train_true, y_train_pred),
+        mape_train=mape(y_train_true, y_train_pred),
+        term_precision=p,
+        term_recall=r,
+        term_f1=f1,
+    )
