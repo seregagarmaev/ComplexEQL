@@ -17,13 +17,13 @@ class KornsBenchmarkConfig:
     per_problem_seed_offset: int = 1000
     algo_seed_offset: int = 10_000
     run_seed_offset: int = 1_000_000
-    n_runs: int = 1 #5
+    n_runs: int = 5
 
 
 @dataclass(frozen=True)
 class PySRConfig:
-    niterations: int = 10#100
-    populations: int = 10#100
+    niterations: int = 1000
+    populations: int = 100
     maxsize: int = 20
     timeout_in_seconds: Optional[int] = None
     unary_ops: List[str] = ("sin", "cos", "tan", "tanh", "exp", "log", "sqrt")
