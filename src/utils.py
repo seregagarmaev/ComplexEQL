@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import random
 import time
+import math
 from typing import Any, Callable, Dict, Iterable, Optional
 
 import numpy as np
@@ -50,7 +51,25 @@ def linear_schedule(epoch: int, start: float, end: float, warmup: int) -> float:
     return float(start + (end - start) * t)
 
 
+def log_schedule(epoch: int, start: float, end: float, warmup: int, eps: float = 1e-12) -> float:
+    """
+    Log-space interpolation from start -> end over `warmup` epochs.
+    """
+    start = float(max(start, eps))
+    end = float(max(end, eps))
+    if warmup <= 0:
+        return end
+    denom = float(max(warmup - 1, 1))
+    t = min(max(epoch, 0), warmup - 1) / denom
+    ls = math.log(start)
+    le = math.log(end)
+    return float(math.exp(ls + (le - ls) * t))
+
+
 def build_op_params(epoch: int, cfg) -> Optional[OpParams]:
+    """
+    Kept for backward compatibility; your cycle-based training uses op_params_override.
+    """
     if not bool(getattr(cfg, "use_op_params", False)):
         return None
 
@@ -81,6 +100,22 @@ def build_op_params(epoch: int, cfg) -> Optional[OpParams]:
             op_params[opname] = op_kwargs
 
     return op_params if op_params else None
+
+
+def build_trig_op_params(cfg, r_value: float) -> Optional[OpParams]:
+    """
+    Cycle-driven r for sin/cos/tan. Returns None if cfg.use_op_params is False.
+    """
+    if not bool(getattr(cfg, "use_op_params", False)):
+        return None
+
+    r_value = float(r_value)
+    op_params: OpParams = {
+        "sin": {"r": r_value},
+        "cos": {"r": r_value},
+        "tan": {"r": r_value},
+    }
+    return op_params
 
 
 # -------------------------
@@ -132,6 +167,7 @@ def train_one_epoch(
     device: torch.device | str,
     cfg,
     *,
+    op_params_override: Optional[OpParams] = None,
     # L1L0
     l1l0_enabled: bool,
     l1l0_use_real_only: bool,
@@ -158,7 +194,7 @@ def train_one_epoch(
     model.train()
     device = torch.device(device)
 
-    op_params_epoch = build_op_params(epoch, cfg)
+    op_params_epoch = op_params_override if (op_params_override is not None) else build_op_params(epoch, cfg)
 
     total_data_loss = 0.0
     total_reg_loss = 0.0
@@ -245,6 +281,9 @@ def train_one_epoch(
     )
 
 
+# -------------------------
+# Cycle-based training
+# -------------------------
 def train(
     model: torch.nn.Module,
     dataloader: DataLoader,
@@ -256,6 +295,7 @@ def train(
 ):
     device = torch.device(device)
     global_epoch = 0
+    cycle_idx = 0
 
     sl0_weights, al_weights = [], []
     data_losses, imag_w_losses = [], []
@@ -263,44 +303,40 @@ def train(
     opt = optimizer
     sch = scheduler
 
-    def _run_phase(
-        phase_name: str,
-        num_epochs: int,
-        *,
-        l1l0_enabled: bool,
-        l1l0_coeff: float,
-        l1l0_use_real_only: bool,
-        imag_enabled: bool,
-        imag_coeff: float,
-        pruning_enabled: bool,
-        pruning_start_epoch: int,
-        pruning_period: int,
-        pruning_fraction: float,
-        pruning_min_edges_total: int,
-        imag_shrink_enabled: bool,
-        imag_shrink_coeff: float,
-    ):
-        nonlocal global_epoch, sl0_weights, al_weights, data_losses, imag_w_losses
-        nonlocal opt, sch
+    def _record(avg_data: float, avg_imag_w_reg: float):
+        sl0_weights.append(model.symbolic_layers[0].weights.detach().cpu().clone().numpy().copy())
+        al_weights.append(model.assembly_layer.weights.detach().cpu().clone().numpy().copy())
+        data_losses.append(avg_data)
+        imag_w_losses.append(avg_imag_w_reg)
 
-        for e in range(num_epochs):
-            prune_now = False
-            if pruning_enabled and (e >= pruning_start_epoch) and ((e - pruning_start_epoch) % pruning_period == 0):
-                prune_now = True
+    def _maybe_print(tag: str, avg_total: float, avg_data: float, avg_sparse: float, avg_imag_w: float, r_val: float):
+        if (global_epoch + 1) % cfg.print_every == 0 or global_epoch == 0:
+            lr = opt.param_groups[0]["lr"]
+            active = model.count_active_edges()
+            print(
+                f"[{tag} | Epoch {global_epoch+1} | cycle={cycle_idx}] "
+                f"lr={lr:.2e}, total={avg_total:.4e}, data={avg_data:.4e}, "
+                f"sparsity_reg={avg_sparse:.4e}, imag_w={avg_imag_w:.4e}, "
+                f"r={r_val:.4f}, active_edges={active}"
+            )
 
-            prune_threshold_dynamic = 0.0
-            if prune_now:
-                thr, _k_prune, _active = model.pruning_threshold_from_fraction(
-                    pruning_fraction,
-                    min_edges_total=pruning_min_edges_total,
-                    eps=1e-12,
-                )
-                if thr is None:
-                    prune_now = False
-                else:
-                    prune_threshold_dynamic = thr
+    min_edges = int(cfg.pruning_min_edges_total)
+    prune_fraction = float(cfg.pruning_fraction_cycle)
 
-            avg_total, avg_data, _avg_reg, avg_real_reg, avg_imag_w_reg, op_params_epoch = train_one_epoch(
+    # -------------------------------------------------
+    # Repeat cycles until we reach min_edges
+    # -------------------------------------------------
+    while model.count_active_edges() > min_edges:
+        # ===== Cycle Stage A: ramp r log from start->end, no sparsity
+        ramp_epochs = int(cfg.cycle_ramp_epochs)
+        r_start = float(cfg.r_start_cycle)
+        r_end = float(cfg.r_end_cycle)
+
+        for e in range(ramp_epochs):
+            r_val = log_schedule(e, r_start, r_end, ramp_epochs)
+            op_params = build_trig_op_params(cfg, r_val)
+
+            avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, _ = train_one_epoch(
                 epoch=global_epoch,
                 dataloader=dataloader,
                 model=model,
@@ -308,96 +344,171 @@ def train(
                 optimizer=opt,
                 device=device,
                 cfg=cfg,
-                l1l0_enabled=l1l0_enabled,
-                l1l0_use_real_only=l1l0_use_real_only,
-                l1l0_coeff=l1l0_coeff,
+                op_params_override=op_params,
+                l1l0_enabled=False,
+                l1l0_use_real_only=cfg.l1l0_on_real_only,
+                l1l0_coeff=0.0,
                 l1l0_alpha=cfg.l1l0_alpha,
                 l1l0_s=cfg.l1l0_s,
                 l1l0_eps=cfg.l1l0_eps,
-                imag_weights_penalty_enabled=imag_enabled,
-                imag_weights_penalty_coeff=imag_coeff if imag_enabled else 0.0,
-                prune_now=prune_now,
-                prune_threshold=prune_threshold_dynamic if prune_now else 0.0,
-                normalize_divisions=cfg.normalize_divisions,
+                imag_weights_penalty_enabled=True,
+                imag_weights_penalty_coeff=float(cfg.imag_w_coeff_cycle),
+                prune_now=False,
+                prune_threshold=0.0,
+                normalize_divisions=False,
                 normalize_divisions_eps=cfg.normalize_divisions_eps,
                 clamp_pred=getattr(cfg, "clamp_pred", True),
                 clamp_limit=getattr(cfg, "clamp_limit", 1e15),
-                imag_shrink_enabled=imag_shrink_enabled,
-                imag_shrink_coeff=imag_shrink_coeff,
+                imag_shrink_enabled=False,
+                imag_shrink_coeff=1.0,
             )
 
-            if (phase_name == "Phase 3") and (sch is not None):
-                sch.step(avg_data)
-
-            if (global_epoch + 1) % cfg.print_every == 0 or global_epoch == 0:
-                lr = opt.param_groups[0]["lr"]
-                r_str = "NA"
-                if op_params_epoch and ("sin" in op_params_epoch) and ("r" in op_params_epoch["sin"]):
-                    r_str = f"{float(op_params_epoch['sin']['r']):.4f}"
-
-                print(
-                    f"[{phase_name} | Epoch {global_epoch+1}] "
-                    f"lr={lr:.2e}, "
-                    f"total={avg_total:.4e}, data={avg_data:.4e}, "
-                    f"sparsity_reg={avg_real_reg:.4e}, imag_w={avg_imag_w_reg:.4e}, "
-                    f"r={r_str}, imag_coeff={imag_coeff:.3e}"
-                )
-
+            _maybe_print("RAMP", avg_total, avg_data, avg_sparse, avg_imag_w, r_val)
+            _record(avg_data, avg_imag_w)
             global_epoch += 1
-            sl0_weights.append(model.symbolic_layers[0].weights.detach().cpu().clone().numpy().copy())
-            al_weights.append(model.assembly_layer.weights.detach().cpu().clone().numpy().copy())
-            data_losses.append(avg_data)
-            imag_w_losses.append(avg_imag_w_reg)
 
-    _run_phase(
-        "Phase 1",
-        cfg.phase1_epochs,
-        l1l0_enabled=cfg.l1l0_enabled_phase1,
-        l1l0_coeff=cfg.l1l0_real_reg_coeff_phase1,
-        l1l0_use_real_only=cfg.l1l0_on_real_only,
-        imag_enabled=cfg.imag_weights_penalty_enabled_phase1,
-        imag_coeff=cfg.imag_w_coeff_phase1,
-        pruning_enabled=cfg.pruning_enabled_phase1,
-        pruning_start_epoch=cfg.pruning_start_epoch_phase1,
-        pruning_period=cfg.pruning_period_phase1,
-        pruning_fraction=cfg.pruning_fraction_phase1,
-        pruning_min_edges_total=cfg.pruning_min_edges_total,
-        imag_shrink_enabled=cfg.imag_shrink_enabled_phase1,
-        imag_shrink_coeff=cfg.imag_shrink_coeff_phase1,
-    )
+        # ===== Cycle Stage B: r=1.0, sparsity ON, division normalization each epoch
+        spars_epochs = int(cfg.cycle_sparsity_epochs)
+        op_params = build_trig_op_params(cfg, 1.0)
 
-    _run_phase(
-        "Phase 2",
-        cfg.phase2_epochs,
-        l1l0_enabled=cfg.l1l0_enabled_phase2,
-        l1l0_coeff=cfg.l1l0_real_reg_coeff_phase2,
-        l1l0_use_real_only=cfg.l1l0_on_real_only,
-        imag_enabled=cfg.imag_weights_penalty_enabled_phase2,
-        imag_coeff=cfg.imag_w_coeff_phase2,
-        pruning_enabled=cfg.pruning_enabled_phase2,
-        pruning_start_epoch=cfg.pruning_start_epoch_phase2,
-        pruning_period=cfg.pruning_period_phase2,
-        pruning_fraction=cfg.pruning_fraction_phase2,
-        pruning_min_edges_total=cfg.pruning_min_edges_total,
-        imag_shrink_enabled=cfg.imag_shrink_enabled_phase2,
-        imag_shrink_coeff=cfg.imag_shrink_coeff_phase2,
-    )
+        for e in range(spars_epochs):
+            avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, _ = train_one_epoch(
+                epoch=global_epoch,
+                dataloader=dataloader,
+                model=model,
+                loss_fn=loss_fn,
+                optimizer=opt,
+                device=device,
+                cfg=cfg,
+                op_params_override=op_params,
+                l1l0_enabled=True,
+                l1l0_use_real_only=cfg.l1l0_on_real_only,
+                l1l0_coeff=float(cfg.l1l0_real_reg_coeff_cycle),
+                l1l0_alpha=cfg.l1l0_alpha,
+                l1l0_s=cfg.l1l0_s,
+                l1l0_eps=cfg.l1l0_eps,
+                imag_weights_penalty_enabled=True,
+                imag_weights_penalty_coeff=float(cfg.imag_w_coeff_cycle),
+                prune_now=False,
+                prune_threshold=0.0,
+                normalize_divisions=bool(getattr(cfg, "normalize_divisions_during_sparsity", True)),
+                normalize_divisions_eps=cfg.normalize_divisions_eps,
+                clamp_pred=getattr(cfg, "clamp_pred", True),
+                clamp_limit=getattr(cfg, "clamp_limit", 1e15),
+                imag_shrink_enabled=False,
+                imag_shrink_coeff=1.0,
+            )
 
-    _run_phase(
-        "Phase 3",
-        cfg.phase3_epochs,
-        l1l0_enabled=cfg.l1l0_enabled_phase3,
-        l1l0_coeff=cfg.l1l0_real_reg_coeff_phase3,
-        l1l0_use_real_only=cfg.l1l0_on_real_only,
-        imag_enabled=cfg.imag_weights_penalty_enabled_phase3,
-        imag_coeff=cfg.imag_w_coeff_phase3,
-        pruning_enabled=cfg.pruning_enabled_phase3,
-        pruning_start_epoch=cfg.pruning_start_epoch_phase3,
-        pruning_period=cfg.pruning_period_phase3,
-        pruning_fraction=cfg.pruning_fraction_phase3,
-        pruning_min_edges_total=cfg.pruning_min_edges_total,
-        imag_shrink_enabled=cfg.imag_shrink_enabled_phase3,
-        imag_shrink_coeff=cfg.imag_shrink_coeff_phase3,
-    )
+            _maybe_print("SPARSE", avg_total, avg_data, avg_sparse, avg_imag_w, 1.0)
+            _record(avg_data, avg_imag_w)
+            global_epoch += 1
+
+        # ===== End-of-cycle pruning: fraction, but cap to keep >= min_edges
+        before = model.count_active_edges()
+        thr, k_to_prune, active_now = model.pruning_threshold_from_fraction(
+            prune_fraction,
+            min_edges_total=min_edges,
+            eps=1e-12,
+        )
+
+        if thr is None or k_to_prune <= 0 or active_now <= min_edges:
+            break
+
+        pruned = model.cascade_threshold_prunning(threshold=thr, eps=1e-12)
+        after = model.count_active_edges()
+        print(f"[PRUNE | cycle={cycle_idx}] pruned={pruned} (fraction={prune_fraction:g}, thr={thr:g}) active {before}->{after}")
+
+        cycle_idx += 1
+
+        if after <= min_edges:
+            break
+
+    # -------------------------------------------------
+    # Post-cycle finishing:
+    #   - sparsity OFF, imag penalty small
+    #   - r ramp 0.01->1.0 for 10k
+    #   - r=1.0 for last 10k with scheduler ON
+    # -------------------------------------------------
+    post_ramp_epochs = int(cfg.post_ramp_epochs)
+    post_finetune_epochs = int(cfg.post_finetune_epochs)
+
+    r_start_post = float(cfg.r_start_post)
+    r_end_post = float(cfg.r_end_post)
+
+    # Post ramp
+    for e in range(post_ramp_epochs):
+        r_val = log_schedule(e, r_start_post, r_end_post, post_ramp_epochs)
+        op_params = build_trig_op_params(cfg, r_val)
+
+        avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, _ = train_one_epoch(
+            epoch=global_epoch,
+            dataloader=dataloader,
+            model=model,
+            loss_fn=loss_fn,
+            optimizer=opt,
+            device=device,
+            cfg=cfg,
+            op_params_override=op_params,
+            l1l0_enabled=False,
+            l1l0_use_real_only=cfg.l1l0_on_real_only,
+            l1l0_coeff=0.0,
+            l1l0_alpha=cfg.l1l0_alpha,
+            l1l0_s=cfg.l1l0_s,
+            l1l0_eps=cfg.l1l0_eps,
+            imag_weights_penalty_enabled=True,
+            imag_weights_penalty_coeff=float(cfg.imag_w_coeff_post),
+            prune_now=False,
+            prune_threshold=0.0,
+            normalize_divisions=False,
+            normalize_divisions_eps=cfg.normalize_divisions_eps,
+            clamp_pred=getattr(cfg, "clamp_pred", True),
+            clamp_limit=getattr(cfg, "clamp_limit", 1e15),
+            imag_shrink_enabled=False,
+            imag_shrink_coeff=1.0,
+        )
+
+        _maybe_print("POST_RAMP", avg_total, avg_data, avg_sparse, avg_imag_w, r_val)
+        _record(avg_data, avg_imag_w)
+        global_epoch += 1
+
+    # Final finetune with r=1.0 and scheduler ON
+    op_params = build_trig_op_params(cfg, 1.0)
+    for e in range(post_finetune_epochs):
+        avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, _ = train_one_epoch(
+            epoch=global_epoch,
+            dataloader=dataloader,
+            model=model,
+            loss_fn=loss_fn,
+            optimizer=opt,
+            device=device,
+            cfg=cfg,
+            op_params_override=op_params,
+            l1l0_enabled=False,
+            l1l0_use_real_only=cfg.l1l0_on_real_only,
+            l1l0_coeff=0.0,
+            l1l0_alpha=cfg.l1l0_alpha,
+            l1l0_s=cfg.l1l0_s,
+            l1l0_eps=cfg.l1l0_eps,
+            imag_weights_penalty_enabled=True,
+            imag_weights_penalty_coeff=float(cfg.imag_w_coeff_post),
+            prune_now=False,
+            prune_threshold=0.0,
+            normalize_divisions=False,
+            normalize_divisions_eps=cfg.normalize_divisions_eps,
+            clamp_pred=getattr(cfg, "clamp_pred", True),
+            clamp_limit=getattr(cfg, "clamp_limit", 1e15),
+            imag_shrink_enabled=False,
+            imag_shrink_coeff=1.0,
+        )
+
+        if sch is not None:
+            try:
+                sch.step(avg_data)  # ReduceLROnPlateau
+            except TypeError:
+                sch.step()
+
+        _maybe_print("POST_FINE", avg_total, avg_data, avg_sparse, avg_imag_w, 1.0)
+        _record(avg_data, avg_imag_w)
+        global_epoch += 1
 
     return model, (sl0_weights, al_weights, imag_w_losses, data_losses)
