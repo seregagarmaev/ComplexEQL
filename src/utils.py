@@ -333,7 +333,8 @@ def train(
         r_end = float(cfg.r_end_cycle)
 
         for e in range(ramp_epochs):
-            r_val = log_schedule(e, r_start, r_end, ramp_epochs)
+            # r_val = log_schedule(e, r_start, r_end, ramp_epochs)
+            r_val = linear_schedule(e, r_start, r_end, ramp_epochs)
             op_params = build_trig_op_params(cfg, r_val)
 
             avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, _ = train_one_epoch(
@@ -437,7 +438,8 @@ def train(
 
     # Post ramp
     for e in range(post_ramp_epochs):
-        r_val = log_schedule(e, r_start_post, r_end_post, post_ramp_epochs)
+        # r_val = log_schedule(e, r_start_post, r_end_post, post_ramp_epochs)
+        r_val = linear_schedule(e, r_start_post, r_end_post, post_ramp_epochs)
         op_params = build_trig_op_params(cfg, r_val)
 
         avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, _ = train_one_epoch(
