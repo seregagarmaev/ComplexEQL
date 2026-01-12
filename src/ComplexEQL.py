@@ -298,6 +298,17 @@ class ComplexEQL(nn.Module):
         return total
 
     @torch.no_grad()
+    def count_active_edges_per_layer(self) -> tuple[list[int], int]:
+        """
+        Returns:
+          - list of active edges per symbolic layer (len = n_symbolic_layers)
+          - active edges in assembly layer
+        """
+        per_sym = [int((layer.mask > 0.5).sum().item()) for layer in self.symbolic_layers]
+        asm = int((self.assembly_layer.mask > 0.5).sum().item())
+        return per_sym, asm
+
+    @torch.no_grad()
     def pruning_threshold_from_fraction(
         self,
         fraction: float,
@@ -341,6 +352,61 @@ class ComplexEQL(nn.Module):
         thr_val = float(max(float(thr.item()), float(eps)))
         return (thr_val, k_to_prune, active)
 
+    @torch.no_grad()
+    def pruning_thresholds_from_fraction_per_layer(
+        self,
+        fraction: float,
+        *,
+        min_edges_per_layer: int,
+        eps: float = 1e-12,
+    ) -> tuple[list[tuple[float | None, int, int]], tuple[float | None, int, int]]:
+        """
+        For each symbolic layer and for the assembly layer, compute an independent threshold
+        that prunes approximately `fraction` of that layer's currently-active edges, but
+        never prunes below `min_edges_per_layer`.
+
+        Returns:
+          - per-symbolic-layer list: (thr, k_to_prune, active_now)
+          - assembly tuple: (thr, k_to_prune, active_now)
+        """
+        fraction = float(fraction)
+        min_edges_per_layer = int(min_edges_per_layer)
+
+        def _layer_threshold(mags: torch.Tensor, active_now: int) -> tuple[float | None, int, int]:
+            if fraction <= 0.0 or active_now <= min_edges_per_layer:
+                return (None, 0, active_now)
+
+            n = int(mags.numel())
+            if n == 0:
+                return (None, 0, active_now)
+
+            k_target = int(np.floor(fraction * n))
+            k_cap = n - min_edges_per_layer
+            k_to_prune = max(0, min(k_target, k_cap))
+            if k_to_prune <= 0:
+                return (None, 0, active_now)
+
+            # kthvalue is 1-indexed in effect: k must be in [1, n]
+            kth = torch.kthvalue(mags, k_to_prune).values
+            inf = torch.tensor(float("inf"), device=kth.device, dtype=kth.dtype)
+            thr = torch.nextafter(kth, inf)  # ensures "< thr" prunes values <= kth
+            thr_val = float(max(float(thr.item()), float(eps)))
+            return (thr_val, k_to_prune, active_now)
+
+        per_layer: list[tuple[float | None, int, int]] = []
+        for layer in self.symbolic_layers:
+            m = (layer.mask > 0.5)
+            active_now = int(m.sum().item())
+            mags = layer.weights.abs()[m].reshape(-1) if active_now > 0 else torch.empty(0, device=layer.weights.device)
+            per_layer.append(_layer_threshold(mags, active_now))
+
+        mA = (self.assembly_layer.mask > 0.5)
+        activeA = int(mA.sum().item())
+        magsA = self.assembly_layer.weights.abs()[mA].reshape(-1) if activeA > 0 else torch.empty(0, device=self.assembly_layer.weights.device)
+        asm_tuple = _layer_threshold(magsA, activeA)
+
+        return per_layer, asm_tuple
+    
     def prune_by_threshold(self, threshold: float) -> int:
         total = 0
         for layer in self.symbolic_layers:
@@ -469,6 +535,119 @@ class ComplexEQL(nn.Module):
 
         return newly_pruned
 
+    @torch.no_grad()
+    def cascade_cleanup_disconnected_(self) -> int:
+        """
+        Remove (mask=0, weight=0) any edges/nodes that do not contribute
+        to the final output, given the CURRENT masks.
+
+        This is the 'levitating nodes' cleanup after any pruning step.
+        It does NOT consider magnitudes or thresholds.
+        """
+        n0 = int(self.cfg.n_input_fields)
+        L = len(self.symbolic_layers)
+
+        newly_pruned = 0
+
+        # -------------------------
+        # 1) Determine which assembly inputs are required (active)
+        # -------------------------
+        asm_m = (self.assembly_layer.mask[:, 0] > 0.5)  # shape (n0 + last_ops,)
+        # Required last-layer outputs are those assembly edges that connect to them
+        last_ops = self.symbolic_layers[-1].n_ops
+        req_h_next = asm_m[n0:n0 + last_ops].clone()     # shape (last_ops,)
+
+        # Note: we do NOT drop any assembly edges here; that is handled by your per-layer pruning.
+        # This function only removes upstream dead structure.
+
+        # -------------------------
+        # 2) Walk backward through symbolic layers
+        # -------------------------
+        for layer_idx in range(L - 1, -1, -1):
+            layer = self.symbolic_layers[layer_idx]
+
+            # req_out: which ops outputs of this layer are required by downstream
+            # shape (layer.n_ops,)
+            req_out = req_h_next.clone()
+
+            # If an op output is NOT required, the entire operator output column(s) can be dropped:
+            #   - unary op k => column k
+            #   - binary op i => columns a_col, b_col
+            # This removes "dangling operator outputs".
+            # We only prune edges that are currently active.
+            for k in range(layer.n_unary_ops):
+                if not bool(req_out[k].item()):
+                    col = k
+                    active_mask = (layer.mask[:, col] > 0.5)
+                    if active_mask.any():
+                        newly_pruned += int(active_mask.sum().item())
+                        layer.mask[active_mask, col] = 0.0
+                        layer.weights[active_mask, col] = torch.complex(
+                            torch.zeros_like(layer.weights.real[active_mask, col]),
+                            torch.zeros_like(layer.weights.imag[active_mask, col]),
+                        )
+
+            for i in range(layer.n_binary_ops):
+                out_idx = layer.n_unary_ops + i
+                if not bool(req_out[out_idx].item()):
+                    a_col = layer.n_unary_ops + 2 * i
+                    b_col = a_col + 1
+
+                    active_a = (layer.mask[:, a_col] > 0.5)
+                    active_b = (layer.mask[:, b_col] > 0.5)
+
+                    if active_a.any():
+                        newly_pruned += int(active_a.sum().item())
+                        layer.mask[active_a, a_col] = 0.0
+                        layer.weights[active_a, a_col] = torch.complex(
+                            torch.zeros_like(layer.weights.real[active_a, a_col]),
+                            torch.zeros_like(layer.weights.imag[active_a, a_col]),
+                        )
+                    if active_b.any():
+                        newly_pruned += int(active_b.sum().item())
+                        layer.mask[active_b, b_col] = 0.0
+                        layer.weights[active_b, b_col] = torch.complex(
+                            torch.zeros_like(layer.weights.real[active_b, b_col]),
+                            torch.zeros_like(layer.weights.imag[active_b, b_col]),
+                        )
+
+            # -------------------------
+            # 3) Determine which INPUTS to this layer are required
+            # -------------------------
+            # A given input feature j is required if it has any active edge into any required op output.
+            req_in_this_layer = torch.zeros(layer.n_input_fields, dtype=torch.bool, device=layer.weights.device)
+
+            # unary outputs: column k
+            for k in range(layer.n_unary_ops):
+                if not bool(req_out[k].item()):
+                    continue
+                col = k
+                keep_edges = (layer.mask[:, col] > 0.5)  # after pruning above
+                req_in_this_layer |= keep_edges
+
+            # binary outputs: columns a_col and b_col
+            for i in range(layer.n_binary_ops):
+                out_idx = layer.n_unary_ops + i
+                if not bool(req_out[out_idx].item()):
+                    continue
+                a_col = layer.n_unary_ops + 2 * i
+                b_col = a_col + 1
+
+                keep_a = (layer.mask[:, a_col] > 0.5)
+                keep_b = (layer.mask[:, b_col] > 0.5)
+
+                req_in_this_layer |= (keep_a | keep_b)
+
+            layer.weights.data = nan_to_num_complex(layer.weights.data, nan=0.0, posinf=0.0, neginf=0.0)
+
+            # For the previous layer, required outputs are exactly the "h" part of this layer's inputs.
+            # Inputs to layer are [x0 (n0), h_prev (...)]
+            if layer_idx == 0:
+                break
+            req_h_next = req_in_this_layer[n0:]
+
+        return newly_pruned
+    
     @torch.no_grad()
     def normalize_all_divisions_(self, eps: float = 1e-12) -> int:
         total = 0

@@ -33,7 +33,7 @@ def clamp_complex(
 
 
 def _sanitize_out(y: torch.Tensor) -> torch.Tensor:
-    y = nan_to_num_complex(y, nan=0.0, posinf=CLAMP_VAL, neginf=-CLAMP_VAL)
+    y = nan_to_num_complex(y, nan=0.0, posinf=0.0, neginf=0.0)
     y = clamp_complex(y, -CLAMP_VAL, CLAMP_VAL)
     return y
 

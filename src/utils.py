@@ -311,13 +311,16 @@ def train(
                 f"r={r_val:.4f}, active_edges={active}"
             )
 
-    min_edges = int(cfg.pruning_min_edges_total)
+    min_edges_layer = int(cfg.pruning_min_edges_per_layer)
     prune_fraction = float(cfg.pruning_fraction_cycle)
 
     # -------------------------------------------------
     # Repeat cycles until we reach min_edges
     # -------------------------------------------------
-    while model.count_active_edges() > min_edges:
+    while True:
+        sym_now, asm_now = model.count_active_edges_per_layer()
+        if not (any(n > min_edges_layer for n in sym_now) or (asm_now > min_edges_layer)):
+            break
         # ===== Cycle Stage A: ramp r log from start->end, no sparsity
         ramp_epochs = int(cfg.cycle_ramp_epochs)
         r_start = float(cfg.r_start_cycle)
@@ -391,24 +394,61 @@ def train(
             _record(avg_data, avg_imag_w)
             global_epoch += 1
 
-        # ===== End-of-cycle pruning: fraction, but cap to keep >= min_edges
-        before = model.count_active_edges()
-        thr, k_to_prune, active_now = model.pruning_threshold_from_fraction(
+        # ===== End-of-cycle pruning: PER-LAYER thresholds, PER-LAYER min edges
+        min_edges_layer = int(cfg.pruning_min_edges_per_layer)
+
+        before_total = model.count_active_edges()
+        before_sym, before_asm = model.count_active_edges_per_layer()
+
+        per_sym, asm = model.pruning_thresholds_from_fraction_per_layer(
             prune_fraction,
-            min_edges_total=min_edges,
+            min_edges_per_layer=min_edges_layer,
             eps=1e-12,
         )
 
-        if thr is None or k_to_prune <= 0 or active_now <= min_edges:
-            break
+        pruned_total = 0
 
-        pruned = model.cascade_threshold_prunning(threshold=thr, eps=1e-12)
-        after = model.count_active_edges()
-        print(f"[PRUNE | cycle={cycle_idx}] pruned={pruned} (fraction={prune_fraction:g}, thr={thr:g}) active {before}->{after}")
+        # prune each symbolic layer independently
+        for li, (thr, k_to_prune, active_now) in enumerate(per_sym):
+            if thr is None or k_to_prune <= 0 or active_now <= min_edges_layer:
+                continue
+            pruned_here = model.symbolic_layers[li].prune_by_threshold(thr)
+            pruned_total += pruned_here
+            if pruned_here > 0:
+                print(
+                    f"[PRUNE_SYM | cycle={cycle_idx} | layer={li}] "
+                    f"pruned={pruned_here} (fraction={prune_fraction:g}, thr={thr:g}) "
+                    f"active {before_sym[li]}->{int((model.symbolic_layers[li].mask > 0.5).sum().item())}"
+                )
+
+        # prune assembly independently
+        thrA, kA, activeA = asm
+        if thrA is not None and kA > 0 and activeA > min_edges_layer:
+            prunedA = model.assembly_layer.prune_by_threshold(thrA)
+            pruned_total += prunedA
+            if prunedA > 0:
+                afterA = int((model.assembly_layer.mask > 0.5).sum().item())
+                print(
+                    f"[PRUNE_ASM | cycle={cycle_idx}] "
+                    f"pruned={prunedA} (fraction={prune_fraction:g}, thr={thrA:g}) "
+                    f"active {before_asm}->{afterA}"
+                )
+        
+        # After per-layer pruning, remove levitating/disconnected upstream structure
+        cleaned = model.cascade_cleanup_disconnected_()
+        if cleaned > 0:
+            print(f"[CLEAN | cycle={cycle_idx}] cleaned_disconnected={cleaned}")
+
+        after_total = model.count_active_edges()
+        if pruned_total > 0:
+            print(f"[PRUNE | cycle={cycle_idx}] pruned_total={pruned_total} active {before_total}->{after_total}")
 
         cycle_idx += 1
 
-        if after <= min_edges:
+        # Stop cycling if no layer can prune any further (given min per-layer)
+        sym_now, asm_now = model.count_active_edges_per_layer()
+        can_prune_more = any(n > min_edges_layer for n in sym_now) or (asm_now > min_edges_layer)
+        if (pruned_total == 0) or (not can_prune_more):
             break
 
     # -------------------------------------------------

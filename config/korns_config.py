@@ -90,7 +90,7 @@ class CEQLModelTrainingConfig:
 
     # ---- End-of-cycle pruning
     pruning_fraction_cycle = 0.2
-    pruning_min_edges_total = 20
+    pruning_min_edges_per_layer = 10
 
     # ---- Small imag(weights) penalty applied throughout cycles
     imag_w_coeff_cycle = 1e-3
