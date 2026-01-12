@@ -119,40 +119,33 @@ def build_trig_op_params(cfg, r_value: float) -> Optional[OpParams]:
 
 
 # -------------------------
-# L1L0 smooth sparsity penalty
+# L1 sparsity penalty
 # -------------------------
-class L1L0Smooth(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(
-        self,
-        input_tensor: torch.Tensor | Iterable[torch.Tensor],
-        alpha: float = 1.0,
-        s: float = 0.05,
-        eps: float = 1e-12,
-    ) -> torch.Tensor:
-        return l1l0_smooth(input_tensor, alpha=alpha, s=s, eps=eps)
-
-
-def l1l0_smooth(
-    input_tensor: torch.Tensor | Iterable[torch.Tensor],
-    alpha: float = 1.0,
-    s: float = 0.05,
+def l1_penalty(
+    tensors: torch.Tensor | Iterable[torch.Tensor],
+    *,
+    use_real_only: bool,
     eps: float = 1e-12,
 ) -> torch.Tensor:
-    if isinstance(input_tensor, (list, tuple)):
-        return sum(l1l0_smooth(t, alpha=alpha, s=s, eps=eps) for t in input_tensor)
+    """
+    L1 penalty for real or complex weights.
 
-    x = input_tensor
-    absx = torch.abs(x)
+    If use_real_only:
+        sum(|Re(w)|)
+    else:
+        sum(|w|) where |w| = sqrt(Re(w)^2 + Im(w)^2 + eps) for complex weights.
+    """
+    if isinstance(tensors, (list, tuple)):
+        return sum(l1_penalty(t, use_real_only=use_real_only, eps=eps) for t in tensors)
 
-    inner = absx < s
-    poly = (x**4) / (-8.0 * s**3) + (x**2) * (3.0 / (4.0 * s)) + 3.0 * s / 8.0
-    smooth_abs = torch.where(inner, poly, absx)
+    w = tensors
 
-    penalty = ((alpha + 1.0) * smooth_abs) / (alpha + smooth_abs + eps)
-    return torch.sum(penalty)
+    if torch.is_complex(w):
+        if use_real_only:
+            return w.real.abs().sum()
+        return torch.sqrt(w.real * w.real + w.imag * w.imag + eps).sum()
+
+    return w.abs().sum()
 
 
 # -------------------------
@@ -168,13 +161,11 @@ def train_one_epoch(
     cfg,
     *,
     op_params_override: Optional[OpParams] = None,
-    # L1L0
-    l1l0_enabled: bool,
-    l1l0_use_real_only: bool,
-    l1l0_coeff: float,
-    l1l0_alpha: float,
-    l1l0_s: float,
-    l1l0_eps: float,
+    # L1
+    l1_enabled: bool,
+    l1_use_real_only: bool,
+    l1_coeff: float,
+    l1_eps: float,
     # imag penalty
     imag_weights_penalty_enabled: bool,
     imag_weights_penalty_coeff: float,
@@ -198,12 +189,10 @@ def train_one_epoch(
 
     total_data_loss = 0.0
     total_reg_loss = 0.0
-    total_real_reg_loss = 0.0
+    total_real_reg_loss = 0.0  # now: L1 reg (kept name for backward compatibility)
     total_imag_w_reg_loss = 0.0
     total_loss = 0.0
     num_samples = 0
-
-    l1l0_penalty = L1L0Smooth()
 
     for _, (X, y) in enumerate(dataloader):
         X = X.to(device)
@@ -221,16 +210,18 @@ def train_one_epoch(
 
         data_loss = loss_fn(pred.real, y)
 
-        # L1L0 sparsity
-        if l1l0_enabled and l1l0_coeff > 0.0:
-            if l1l0_use_real_only:
+        # L1 sparsity
+        if l1_enabled and l1_coeff > 0.0:
+            if l1_use_real_only:
+                # penalize only real-part weights (they are real tensors already)
                 reg_target = model.get_real_weights_list()
+                real_reg = l1_coeff * l1_penalty(reg_target, use_real_only=False, eps=l1_eps)
             else:
+                # penalize complex magnitude: |w| = sqrt(Re^2 + Im^2)
                 real_list = model.get_real_weights_list()
                 imag_list = model.get_imag_weights_list()
-                reg_target = [torch.sqrt(r**2 + i**2) for r, i in zip(real_list, imag_list)]
-
-            real_reg = l1l0_coeff * l1l0_penalty(reg_target, alpha=l1l0_alpha, s=l1l0_s, eps=l1l0_eps)
+                reg_target = [torch.complex(r, i) for r, i in zip(real_list, imag_list)]
+                real_reg = l1_coeff * l1_penalty(reg_target, use_real_only=False, eps=l1_eps)
         else:
             real_reg = torch.tensor(0.0, device=device)
 
@@ -346,12 +337,10 @@ def train(
                 device=device,
                 cfg=cfg,
                 op_params_override=op_params,
-                l1l0_enabled=False,
-                l1l0_use_real_only=cfg.l1l0_on_real_only,
-                l1l0_coeff=0.0,
-                l1l0_alpha=cfg.l1l0_alpha,
-                l1l0_s=cfg.l1l0_s,
-                l1l0_eps=cfg.l1l0_eps,
+                l1_enabled=False,
+                l1_use_real_only=cfg.l1_on_real_only,
+                l1_coeff=0.0,
+                l1_eps=float(getattr(cfg, "l1_eps", 1e-12)),
                 imag_weights_penalty_enabled=True,
                 imag_weights_penalty_coeff=float(cfg.imag_w_coeff_cycle),
                 prune_now=False,
@@ -382,12 +371,10 @@ def train(
                 device=device,
                 cfg=cfg,
                 op_params_override=op_params,
-                l1l0_enabled=True,
-                l1l0_use_real_only=cfg.l1l0_on_real_only,
-                l1l0_coeff=float(cfg.l1l0_real_reg_coeff_cycle),
-                l1l0_alpha=cfg.l1l0_alpha,
-                l1l0_s=cfg.l1l0_s,
-                l1l0_eps=cfg.l1l0_eps,
+                l1_enabled=True,
+                l1_use_real_only=cfg.l1_on_real_only,
+                l1_coeff=float(cfg.l1_reg_coeff_cycle),
+                l1_eps=float(getattr(cfg, "l1_eps", 1e-12)),
                 imag_weights_penalty_enabled=True,
                 imag_weights_penalty_coeff=float(cfg.imag_w_coeff_cycle),
                 prune_now=False,
@@ -451,12 +438,10 @@ def train(
             device=device,
             cfg=cfg,
             op_params_override=op_params,
-            l1l0_enabled=False,
-            l1l0_use_real_only=cfg.l1l0_on_real_only,
-            l1l0_coeff=0.0,
-            l1l0_alpha=cfg.l1l0_alpha,
-            l1l0_s=cfg.l1l0_s,
-            l1l0_eps=cfg.l1l0_eps,
+            l1_enabled=False,
+            l1_use_real_only=cfg.l1_on_real_only,
+            l1_coeff=0.0,
+            l1_eps=float(getattr(cfg, "l1_eps", 1e-12)),
             imag_weights_penalty_enabled=True,
             imag_weights_penalty_coeff=float(cfg.imag_w_coeff_post),
             prune_now=False,
@@ -485,12 +470,10 @@ def train(
             device=device,
             cfg=cfg,
             op_params_override=op_params,
-            l1l0_enabled=False,
-            l1l0_use_real_only=cfg.l1l0_on_real_only,
-            l1l0_coeff=0.0,
-            l1l0_alpha=cfg.l1l0_alpha,
-            l1l0_s=cfg.l1l0_s,
-            l1l0_eps=cfg.l1l0_eps,
+            l1_enabled=False,
+            l1_use_real_only=cfg.l1_on_real_only,
+            l1_coeff=0.0,
+            l1_eps=float(getattr(cfg, "l1_eps", 1e-12)),
             imag_weights_penalty_enabled=True,
             imag_weights_penalty_coeff=float(cfg.imag_w_coeff_post),
             prune_now=False,

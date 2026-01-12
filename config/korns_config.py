@@ -17,7 +17,7 @@ class KornsBenchmarkConfig:
     per_problem_seed_offset: int = 1000
     algo_seed_offset: int = 10_000
     run_seed_offset: int = 1_000_000
-    n_runs: int = 5
+    n_runs: int = 1 #5
 
 
 @dataclass(frozen=True)
@@ -46,80 +46,69 @@ class CEQLModelTrainingConfig:
     # Optimization
     # -------------------------
     lr = 1e-3
-    scheduler = "ReduceLROnPlateau"
-    schedulerparams = dict(mode="min", patience=500, factor=0.1, min_lr=1e-5)
-    scheduler_warmup_phase2 = 500
+    scheduler = "ReduceLROnPlateau"   # used ONLY in the final 10000 epochs
+    schedulerparams = dict(mode="min", patience=1000, factor=0.1, min_lr=1e-8)
+
+    print_every = 500
 
     # -------------------------
-    # Phase control
+    # L1 sparsity
     # -------------------------
-    phase1_epochs = 30000
-    phase2_epochs = 30000
-    phase3_epochs = 10000
-    print_every = 100
+    l1_on_real_only = False    # if True: penalize only Re(weights)
+    l1_eps = 1e-12             # only used for magnitude stability when complex
 
-    # ==========================================================
-    # Imaginary-weights anneal + plateau-reset (shared for phases 1/2)
-    # ==========================================================
-    imag_weights_penalty_enabled_phase1 = True
-    imag_weights_penalty_enabled_phase2 = True
-    imag_weights_penalty_enabled_phase3 = True
+    # -------------------------
+    # Division normalization
+    # -------------------------
+    normalize_divisions_eps = 1e-12  # used during sparsity stage inside cycles
 
-    imag_anneal_epochs = 5000
-    imag_w_coeff_start = 1e-4
-    imag_w_coeff_end = 1e3
-    imag_anneal_mode = "exp"  # "linear" or "exp"
+    # -------------------------
+    # Optional clamp (kept from utils behavior)
+    # -------------------------
+    clamp_pred = True
+    clamp_limit = 1e2
 
-    # plateau logic: after anneal in each cycle, monitor data loss
-    imag_plateau_patience = 1000
-    imag_plateau_rel_tol = 1e-4 # 1e-6
-    imag_plateau_check_after_anneal = True  # start plateau counting only after anneal is finished in the cycle
-    imag_plateau_min_epoch_in_phase = 10000     # additional warmup in each phase before plateau logic starts
+    # -------------------------
+    # Trig control (r is driven by the cycle logic; schedules here are unused)
+    # -------------------------
+    use_op_params = True
+    op_param_schedules = {}  # r is set via build_trig_op_params(cfg, r_value)
 
-    # when plateau triggers: reinit Im(weights) and restart anneal cycle
-    # imag_reinit_scale = 1.0  # Im ~ U(-scale/2, scale/2) for active weights
-    imag_reinit_gain = 1.0
-    imag_reinit_scale_min = 1e-4
-    imag_reinit_scale_max = 0.1
+    # =========================================================
+    # Cycle-based training strategy
+    # =========================================================
 
-    # ==========================================================
-    # Sparsification (Phase 2 only): L1L0 on REAL(weights) only
-    # ==========================================================
-    l1l0_enabled_phase1 = False
-    l1l0_enabled_phase2 = True
-    l1l0_enabled_phase3 = False
+    # ---- Cycle stage A: ramp r from r_start_cycle -> r_end_cycle (log), no sparsity
+    cycle_ramp_epochs = 5000 #10000
+    r_start_cycle = 0.01
+    r_end_cycle = 1.0
 
-    l1l0_on_real_only = False #True
-    l1l0_real_reg_coeff_phase1 = 1e-3
-    l1l0_real_reg_coeff_phase2 = 1e3
+    # ---- Cycle stage B: r fixed at 1.0, sparsity ON, division normalization after each epoch
+    cycle_sparsity_epochs = 5000 #10000
+    l1_reg_coeff_cycle = 1e-3 # applied to whole complex number, not real only. TODO: rename
+    normalize_divisions_during_sparsity = True
 
-    # L1L0 schedule parameters (used when enabled)
-    alpha_start = 1e-1
-    alpha_end = 1e-1
-    l1l0_start_epoch = 0
-    l1l0_end_epoch = phase2_epochs
-    l1l0_s = 0.001
-    l1l0_eps = 1e-12
+    # ---- End-of-cycle pruning
+    pruning_fraction_cycle = 0.2
+    pruning_min_edges_total = 20
 
-    # ==========================================================
-    # Pruning (Phase 2 only, as per your strategy)
-    # ==========================================================
-    pruning_enabled_phase1 = False
-    pruning_enabled_phase2 = True
-    pruning_enabled_phase3 = False
+    # ---- Small imag(weights) penalty applied throughout cycles
+    imag_w_coeff_cycle = 1e-3
 
-    pruning_start_epoch = 5000
-    pruning_period = 1000
-    pruning_threshold = 1e-2
+    # =========================================================
+    # Post-cycle finishing strategy
+    # =========================================================
 
-    # ==========================================================
-    # Phase 3: keep imag penalty "big" (fixed), no anneal/reset, no sparsity/pruning
-    # ==========================================================
-    imag_w_coeff_phase3 = 1e3 #imag_w_coeff_end
+    # 1) sparsity OFF, imag penalty ON, ramp r from r_start_post -> r_end_post (log)
+    post_ramp_epochs = 10000
+    r_start_post = 0.01
+    r_end_post = 1.0
 
-    # division normalization
-    normalize_divisions = True
-    normalize_divisions_eps = 1e-12
+    # 2) r fixed at 1.0 for final optimization; scheduler ON here
+    post_finetune_epochs = 10000
+
+    # imag penalty during post stages (keep small)
+    imag_w_coeff_post = 1e-3
     
     
 
@@ -128,98 +117,70 @@ class CEQLConfig:
     device = CEQLModelTrainingConfig.device
     no_params_list = [
         [
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-            {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-            {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
-            {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
-            {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
-            {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
-            {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
-            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
+            {"op": "id",    "type": "unary"},
+            {"op": "id",    "type": "unary"},
+            {"op": "const", "type": "unary"},
+            {"op": "square","type": "unary"},
+            {"op": "sqrt",  "type": "unary"},
+            {"op": "exp",   "type": "unary"},
+            {"op": "sin",   "type": "unary"},
+            {"op": "cos",   "type": "unary"},
+            {"op": "log",   "type": "unary"},
+            {"op": "tan",   "type": "unary"},
+            {"op": "tanh",  "type": "unary"},
+            {"op": "mul",   "type": "binary"},
+            {"op": "div",   "type": "binary"},
         ],
         [
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-            {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-            {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
-            {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
-            {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
-            {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
-            {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
-            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
+            {"op": "id",    "type": "unary"},
+            {"op": "id",    "type": "unary"},
+            {"op": "const", "type": "unary"},
+            {"op": "square","type": "unary"},
+            {"op": "sqrt",  "type": "unary"},
+            {"op": "exp",   "type": "unary"},
+            {"op": "sin",   "type": "unary"},
+            {"op": "cos",   "type": "unary"},
+            {"op": "log",   "type": "unary"},
+            {"op": "tan",   "type": "unary"},
+            {"op": "tanh",  "type": "unary"},
+            {"op": "mul",   "type": "binary"},
+            {"op": "div",   "type": "binary"},
         ],
         [
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'id',     'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'const',  'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'square', 'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'sqrt',   'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-            {'library_function': 'exp',   'library_function_type': 'unary',  'in_channels': 1},
-            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            {"library_function": 'sin', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            {"library_function": 'cos', 'library_function_type': 'unary', 'in_channels': 1, 'damp_gamma': 1.0, 'damp_p': 1.0},
-            {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-            {'library_function': 'log',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-100},
-            {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
-            {'library_function': 'tan',    'library_function_type': 'unary',  'in_channels': 1, 'stair_step_size': 1e-4},
-            {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
-            {'library_function': "tanh",   'library_function_type': 'unary', "in_channels": 1, 'stair_step_size': 1e-4},
-            {'library_function': 'mul',    'library_function_type': 'binary', 'in_channels': 2},
-            {'library_function': 'div',    'library_function_type': 'binary', 'in_channels': 2, 'stair_step_size': 1e-4},
+            {"op": "id",    "type": "unary"},
+            {"op": "id",    "type": "unary"},
+            {"op": "const", "type": "unary"},
+            {"op": "square","type": "unary"},
+            {"op": "sqrt",  "type": "unary"},
+            {"op": "exp",   "type": "unary"},
+            {"op": "sin",   "type": "unary"},
+            {"op": "cos",   "type": "unary"},
+            {"op": "log",   "type": "unary"},
+            {"op": "tan",   "type": "unary"},
+            {"op": "tanh",  "type": "unary"},
+            {"op": "mul",   "type": "binary"},
+            {"op": "div",   "type": "binary"},
         ],
     ]
 
-    n_input_fields = 5
+    n_input_fields = 2
     n_symbolic_layers = len(no_params_list)
 
     functions_dict = {
-        'x':      sp.Symbol('x'),
-        'id':     lambda x: x,
-        'const':  lambda x: sp.Integer(1),
-        'square': lambda x: x**2,
-        'cube':   lambda x: x**3,
-        'sqrt':   lambda x: sp.sqrt(x),
-        'exp':    lambda x: sp.exp(x),
-        'sin':    lambda x: sp.sin(x),
-        'cos':    lambda x: sp.cos(x),
-        'tan':    lambda x: sp.tan(x),
-        'tanh':   lambda x: sp.tanh(x),
-        'log':    lambda x: sp.log(x),
-        'mul':    lambda a, b: a * b,
-        'div':    lambda a, b: a / b,
-        'pow':    lambda a, b: a**b,
+        "x":      sp.Symbol("x"),
+        "id":     lambda x: x,
+        "const":  lambda x: sp.Integer(1),
+        "square": lambda x: x**2,
+        "cube":   lambda x: x**3,
+        "sqrt":   lambda x: sp.sqrt(x),
+        "exp":    lambda x: sp.exp(x),
+        "sin":    lambda x: sp.sin(x),
+        "cos":    lambda x: sp.cos(x),
+        "tan":    lambda x: sp.tan(x),
+        "tanh":   lambda x: sp.tanh(x),
+        "log":    lambda x: sp.log(x),
+        "mul":    lambda a, b: a * b,
+        "div":    lambda a, b: a / b,
     }
 
 

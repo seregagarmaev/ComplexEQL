@@ -13,15 +13,13 @@ class ModelTrainingConfig:
     scheduler = "ReduceLROnPlateau"   # used ONLY in the final 10000 epochs
     schedulerparams = dict(mode="min", patience=1000, factor=0.1, min_lr=1e-8)
 
-    print_every = 100
+    print_every = 500
 
     # -------------------------
-    # L1L0 (constant alpha)
+    # L1 sparsity
     # -------------------------
-    l1l0_alpha = 1e-1
-    l1l0_s = 0.001
-    l1l0_eps = 1e-12
-    l1l0_on_real_only = False
+    l1_on_real_only = False    # if True: penalize only Re(weights)
+    l1_eps = 1e-12             # only used for magnitude stability when complex
 
     # -------------------------
     # Division normalization
@@ -32,7 +30,7 @@ class ModelTrainingConfig:
     # Optional clamp (kept from utils behavior)
     # -------------------------
     clamp_pred = True
-    clamp_limit = 1e15
+    clamp_limit = 1e2
 
     # -------------------------
     # Trig control (r is driven by the cycle logic; schedules here are unused)
@@ -45,13 +43,13 @@ class ModelTrainingConfig:
     # =========================================================
 
     # ---- Cycle stage A: ramp r from r_start_cycle -> r_end_cycle (log), no sparsity
-    cycle_ramp_epochs = 10000
+    cycle_ramp_epochs = 5000 #10000
     r_start_cycle = 0.01
     r_end_cycle = 1.0
 
     # ---- Cycle stage B: r fixed at 1.0, sparsity ON, division normalization after each epoch
-    cycle_sparsity_epochs = 10000
-    l1l0_real_reg_coeff_cycle = 1e-1 # applied to whole complex number, not real only. TODO: rename
+    cycle_sparsity_epochs = 5000 #10000
+    l1_reg_coeff_cycle = 1e-3 # applied to whole complex number, not real only. TODO: rename
     normalize_divisions_during_sparsity = True
 
     # ---- End-of-cycle pruning
