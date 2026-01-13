@@ -138,7 +138,9 @@ def tan_operation_surrogate(x: torch.Tensor, *, r: float, **_) -> torch.Tensor:
     den_real = damp * torch.cos(u)
     den = torch.complex(den_real, v)
 
-    y = _sanitize_out(num / den)
+    y_real = (num / den).real
+    y = torch.complex(y_real, torch.zeros_like(y_real))
+    y = _sanitize_out(y)
     return y.unsqueeze(-1)
 
 

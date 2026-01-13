@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 import numpy as np
-import sympy
+import sympy as sp
 import torch
 import torch.nn as nn
 
@@ -10,13 +10,21 @@ from src.operations import OpParams, load_models
 from src.sympy_utils import prune_small_coeff_terms
 
 
-def _threshold_multiply(coef: sympy.Number, val: sympy.Expr, decimals: int) -> sympy.Expr:
-    try:
-        if coef.round(decimals) == 0.0:
-            return sympy.Integer(0)
-        return (coef * val).n(decimals)
-    except Exception:
-        return coef * val
+def _threshold_multiply(coef: sp.Number, val: sp.Expr, decimals: int) -> sp.Expr:
+    """
+    Multiply `coef * val` but snap to 0 if the rounded coefficient is 0.
+    No try/except: uses conservative numeric checks only.
+    """
+    # Evaluate coefficient numerically if possible
+    c = sp.N(coef, max(16, decimals + 6))
+    if c.is_number is True:
+        # Snap-to-zero threshold consistent with rounding_decimals
+        thr = 0.5 * (10.0 ** (-int(decimals)))
+        if abs(float(c)) < thr:
+            return sp.Integer(0)
+        return sp.N(coef * val, decimals)
+    # If not numeric, do not attempt rounding logic
+    return coef * val
 
 
 def nan_to_num_complex(
@@ -28,6 +36,58 @@ def nan_to_num_complex(
             torch.nan_to_num(x.imag, nan=nan, posinf=posinf, neginf=neginf),
         )
     return torch.nan_to_num(x, nan=nan, posinf=posinf, neginf=neginf)
+
+
+# -------------------------
+# Symbolic safety helpers (NO try/except)
+# -------------------------
+_BAD_SYMPY_ATOMS = (sp.oo, -sp.oo, sp.zoo, sp.nan)
+
+
+def _sanitize_symbolic(expr: Any) -> sp.Expr:
+    """
+    Replace any expression that becomes NaN/Inf/Zoo with 0.
+    No try/except: strict input handling.
+    """
+    if expr is None:
+        return sp.Integer(0)
+
+    # Accept plain Python scalars deterministically
+    if isinstance(expr, bool):
+        return sp.Integer(int(expr))
+    if isinstance(expr, int):
+        return sp.Integer(expr)
+    if isinstance(expr, float):
+        # If you want, you can also map non-finite floats to 0 here.
+        return sp.Float(expr)
+
+    # Only accept SymPy objects; do NOT sympify arbitrary objects (would require try/except).
+    if not isinstance(expr, sp.Basic):
+        return sp.Integer(0)
+
+    # Structural / property checks
+    if expr.has(*_BAD_SYMPY_ATOMS):
+        return sp.Integer(0)
+    if getattr(expr, "is_infinite", None) is True:
+        return sp.Integer(0)
+    if getattr(expr, "is_nan", None) is True:
+        return sp.Integer(0)
+
+    return expr
+
+
+def _is_exact_zero(e: sp.Expr) -> bool:
+    """
+    Conservative exact-zero check (only returns True when certain).
+    No try/except.
+    """
+    if not isinstance(e, sp.Basic):
+        return False
+    if e.is_zero is True:
+        return True
+    if e.is_number is True and e == 0:
+        return True
+    return False
 
 
 class SymbolicLayer(nn.Module):
@@ -47,8 +107,8 @@ class SymbolicLayer(nn.Module):
         self.n_ops = self.n_unary_ops + self.n_binary_ops
         self.n_inputs = self.n_unary_ops + 2 * self.n_binary_ops
 
-        real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * 0.1
-        imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * 0.1
+        real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5)
+        imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5)
         self.weights = nn.Parameter(torch.complex(real, imag))
         self.mask = nn.Parameter(torch.ones_like(real), requires_grad=False)
 
@@ -57,39 +117,43 @@ class SymbolicLayer(nn.Module):
 
     def get_symbolic_output(
         self,
-        symbolic_inputs: List[sympy.Expr],
+        symbolic_inputs: List[sp.Expr],
         rounding_decimals: int = 2,
-    ) -> List[sympy.Expr]:
-        outs: List[sympy.Expr] = []
+    ) -> List[sp.Expr]:
+        outs: List[sp.Expr] = []
 
         # unary: columns [0 .. n_unary_ops-1]
         for op_idx in range(self.n_unary_ops):
             op_name = self.function_names[op_idx]
-            mixed = sympy.Integer(0)
+            mixed: sp.Expr = sp.Integer(0)
 
             for j in range(len(symbolic_inputs)):
                 w = self.weights[j, op_idx].detach()
-                coef_r = sympy.Float(float(w.real.cpu().item()))
-                coef_i = sympy.Float(float(w.imag.cpu().item()))
-
+                coef_r = sp.Float(float(w.real.cpu().item()))
+                coef_i = sp.Float(float(w.imag.cpu().item()))
                 mixed += _threshold_multiply(coef_r, symbolic_inputs[j], rounding_decimals)
-                mixed += sympy.I * _threshold_multiply(coef_i, symbolic_inputs[j], rounding_decimals)
+                mixed += sp.I * _threshold_multiply(coef_i, symbolic_inputs[j], rounding_decimals)
 
             op = self.functions_dict[op_name]
-            symbolic_out = op(mixed)
 
-            if isinstance(symbolic_out, int) or getattr(symbolic_out, "is_infinite", False):
-                outs.append(sympy.Integer(0))
+            # Deterministic domain guards (no try/except)
+            if op_name == "log":
+                symbolic_out = sp.Integer(0) if _is_exact_zero(mixed) else op(mixed)
+            elif op_name == "sqrt":
+                # sqrt(0) is safe; other domains are left to SymPy and sanitized if it produces zoo/nan/oo
+                symbolic_out = sp.Integer(0) if _is_exact_zero(mixed) else op(mixed)
             else:
-                outs.append(sympy.sympify(symbolic_out))
+                symbolic_out = op(mixed)
+
+            outs.append(_sanitize_symbolic(symbolic_out))
 
         # binary: each op uses two columns
         for i in range(self.n_binary_ops):
             op_name = self.function_names[self.n_unary_ops + i]
             op = self.functions_dict[op_name]
 
-            a = sympy.Integer(0)
-            b = sympy.Integer(0)
+            a: sp.Expr = sp.Integer(0)
+            b: sp.Expr = sp.Integer(0)
             a_col = self.n_unary_ops + 2 * i
             b_col = a_col + 1
 
@@ -97,19 +161,18 @@ class SymbolicLayer(nn.Module):
                 w_a = self.weights[j, a_col].detach()
                 w_b = self.weights[j, b_col].detach()
 
-                a += _threshold_multiply(sympy.Float(float(w_a.real.cpu().item())), symbolic_inputs[j], rounding_decimals)
-                a += sympy.I * _threshold_multiply(sympy.Float(float(w_a.imag.cpu().item())), symbolic_inputs[j], rounding_decimals)
+                a += _threshold_multiply(sp.Float(float(w_a.real.cpu().item())), symbolic_inputs[j], rounding_decimals)
+                a += sp.I * _threshold_multiply(sp.Float(float(w_a.imag.cpu().item())), symbolic_inputs[j], rounding_decimals)
 
-                b += _threshold_multiply(sympy.Float(float(w_b.real.cpu().item())), symbolic_inputs[j], rounding_decimals)
-                b += sympy.I * _threshold_multiply(sympy.Float(float(w_b.imag.cpu().item())), symbolic_inputs[j], rounding_decimals)
+                b += _threshold_multiply(sp.Float(float(w_b.real.cpu().item())), symbolic_inputs[j], rounding_decimals)
+                b += sp.I * _threshold_multiply(sp.Float(float(w_b.imag.cpu().item())), symbolic_inputs[j], rounding_decimals)
 
+            # Deterministic guards for division by exact zero
             if op_name == "div":
-                try:
-                    outs.append(sympy.cancel(a / b))
-                except Exception:
-                    outs.append(sympy.sympify(op(a, b)))
+                expr = sp.Integer(0) if _is_exact_zero(b) else (a / b)
+                outs.append(_sanitize_symbolic(expr))
             else:
-                outs.append(sympy.sympify(op(a, b)))
+                outs.append(_sanitize_symbolic(op(a, b)))
 
         return outs
 
@@ -175,15 +238,12 @@ class SymbolicLayer(nn.Module):
 
     def apply_operations(self, X: torch.Tensor, *, op_params: Optional[OpParams] = None) -> torch.Tensor:
         results: List[torch.Tensor] = []
-
         for i, op in enumerate(self.unary_ops):
             results.append(op(X[:, i], op_params=op_params))
-
         for i in range(self.n_binary_ops):
             start = self.n_unary_ops + 2 * i
             pair = torch.stack((X[:, start], X[:, start + 1]), dim=1)
             results.append(self.binary_ops[i](pair, op_params=op_params))
-
         return torch.cat(results, dim=-1)
 
     def forward(self, X: torch.Tensor, *, op_params: Optional[OpParams] = None) -> torch.Tensor:
@@ -197,24 +257,24 @@ class AssemblyLayer(nn.Module):
         self.cfg = cfg
         in_dim = int(in_dim)
 
-        real = (torch.rand(in_dim, 1) - 0.5) * 0.1
-        imag = (torch.rand(in_dim, 1) - 0.5) * 0.1
+        real = (torch.rand(in_dim, 1) - 0.5)
+        imag = (torch.rand(in_dim, 1) - 0.5)
         self.weights = nn.Parameter(torch.complex(real, imag))
         self.mask = nn.Parameter(torch.ones_like(real), requires_grad=False)
 
     def get_symbolic_output(
         self,
-        symbolic_inputs: List[sympy.Expr],
+        symbolic_inputs: List[sp.Expr],
         rounding_decimals: int = 2,
-    ) -> sympy.Expr:
-        out: sympy.Expr = sympy.Integer(0)
+    ) -> sp.Expr:
+        out: sp.Expr = sp.Integer(0)
         for i in range(len(symbolic_inputs)):
             w = self.weights[i, 0].detach()
-            coef_r = sympy.Float(float(w.real.cpu().item()))
-            coef_i = sympy.Float(float(w.imag.cpu().item()))
+            coef_r = sp.Float(float(w.real.cpu().item()))
+            coef_i = sp.Float(float(w.imag.cpu().item()))
             out += _threshold_multiply(coef_r, symbolic_inputs[i], rounding_decimals)
-            out += sympy.I * _threshold_multiply(coef_i, symbolic_inputs[i], rounding_decimals)
-        return sympy.sympify(out)
+            out += sp.I * _threshold_multiply(coef_i, symbolic_inputs[i], rounding_decimals)
+        return _sanitize_symbolic(out)
 
     def prune_by_threshold(self, threshold: float) -> int:
         with torch.no_grad():
@@ -259,16 +319,17 @@ class ComplexEQL(nn.Module):
 
     def get_symbolic_expression(
         self,
-        symbolic_inputs: List[sympy.Expr],
+        symbolic_inputs: List[sp.Expr],
         rounding_decimals: int = 2,
-    ) -> sympy.Expr:
-        sym_x0: List[sympy.Expr] = symbolic_inputs
-        sym_h: List[sympy.Expr] = self.symbolic_layers[0].get_symbolic_output(sym_x0, rounding_decimals=rounding_decimals)
+    ) -> sp.Expr:
+        sym_x0: List[sp.Expr] = symbolic_inputs
+        sym_h: List[sp.Expr] = self.symbolic_layers[0].get_symbolic_output(sym_x0, rounding_decimals=rounding_decimals)
 
         for layer in self.symbolic_layers[1:]:
             sym_h = layer.get_symbolic_output(sym_x0 + sym_h, rounding_decimals=rounding_decimals)
 
         sym_out = self.assembly_layer.get_symbolic_output(sym_x0 + sym_h, rounding_decimals=rounding_decimals)
+        sym_out = _sanitize_symbolic(sym_out)
         return prune_small_coeff_terms(sym_out, rounding_decimals)
 
     def get_real_weights_list(self) -> list[torch.Tensor]:
@@ -299,11 +360,6 @@ class ComplexEQL(nn.Module):
 
     @torch.no_grad()
     def count_active_edges_per_layer(self) -> tuple[list[int], int]:
-        """
-        Returns:
-          - list of active edges per symbolic layer (len = n_symbolic_layers)
-          - active edges in assembly layer
-        """
         per_sym = [int((layer.mask > 0.5).sum().item()) for layer in self.symbolic_layers]
         asm = int((self.assembly_layer.mask > 0.5).sum().item())
         return per_sym, asm
@@ -360,15 +416,6 @@ class ComplexEQL(nn.Module):
         min_edges_per_layer: int,
         eps: float = 1e-12,
     ) -> tuple[list[tuple[float | None, int, int]], tuple[float | None, int, int]]:
-        """
-        For each symbolic layer and for the assembly layer, compute an independent threshold
-        that prunes approximately `fraction` of that layer's currently-active edges, but
-        never prunes below `min_edges_per_layer`.
-
-        Returns:
-          - per-symbolic-layer list: (thr, k_to_prune, active_now)
-          - assembly tuple: (thr, k_to_prune, active_now)
-        """
         fraction = float(fraction)
         min_edges_per_layer = int(min_edges_per_layer)
 
@@ -386,10 +433,9 @@ class ComplexEQL(nn.Module):
             if k_to_prune <= 0:
                 return (None, 0, active_now)
 
-            # kthvalue is 1-indexed in effect: k must be in [1, n]
             kth = torch.kthvalue(mags, k_to_prune).values
             inf = torch.tensor(float("inf"), device=kth.device, dtype=kth.dtype)
-            thr = torch.nextafter(kth, inf)  # ensures "< thr" prunes values <= kth
+            thr = torch.nextafter(kth, inf)
             thr_val = float(max(float(thr.item()), float(eps)))
             return (thr_val, k_to_prune, active_now)
 
@@ -406,7 +452,7 @@ class ComplexEQL(nn.Module):
         asm_tuple = _layer_threshold(magsA, activeA)
 
         return per_layer, asm_tuple
-    
+
     def prune_by_threshold(self, threshold: float) -> int:
         total = 0
         for layer in self.symbolic_layers:
@@ -415,166 +461,19 @@ class ComplexEQL(nn.Module):
         return total
 
     @torch.no_grad()
-    def cascade_threshold_prunning(self, threshold: float, eps: float = 1e-12) -> int:
-        def active_edge_mask(w: torch.Tensor, m: torch.Tensor) -> torch.Tensor:
-            return (m > 0.5) & (w.abs() >= max(threshold, eps))
-
-        n0 = int(self.cfg.n_input_fields)
-        L = len(self.symbolic_layers)
-
-        newly_pruned = 0
-
-        asm_w = self.assembly_layer.weights[:, 0]
-        asm_m = self.assembly_layer.mask[:, 0]
-        keep_asm = active_edge_mask(asm_w, asm_m)
-
-        drop_asm = (asm_m > 0.5) & (~keep_asm)
-        if drop_asm.any():
-            newly_pruned += int(drop_asm.sum().item())
-            self.assembly_layer.mask[drop_asm, 0] = 0.0
-            self.assembly_layer.weights[drop_asm, 0] = torch.complex(
-                torch.zeros_like(self.assembly_layer.weights.real[drop_asm, 0]),
-                torch.zeros_like(self.assembly_layer.weights.imag[drop_asm, 0]),
-            )
-
-        last_ops = self.symbolic_layers[-1].n_ops
-        req_h_next = keep_asm[n0:n0 + last_ops].clone()
-
-        for layer_idx in range(L - 1, -1, -1):
-            layer = self.symbolic_layers[layer_idx]
-            req_out = req_h_next.clone()
-
-            for k in range(layer.n_unary_ops):
-                if not bool(req_out[k].item()):
-                    col = k
-                    active_before = (layer.mask[:, col] > 0.5).sum().item()
-                    if active_before > 0:
-                        newly_pruned += int(active_before)
-                        layer.mask[:, col] = 0.0
-                        layer.weights[:, col] = torch.complex(
-                            torch.zeros_like(layer.weights.real[:, col]),
-                            torch.zeros_like(layer.weights.imag[:, col]),
-                        )
-
-            for i in range(layer.n_binary_ops):
-                out_idx = layer.n_unary_ops + i
-                if not bool(req_out[out_idx].item()):
-                    a_col = layer.n_unary_ops + 2 * i
-                    b_col = a_col + 1
-
-                    active_a = (layer.mask[:, a_col] > 0.5).sum().item()
-                    active_b = (layer.mask[:, b_col] > 0.5).sum().item()
-
-                    if active_a > 0:
-                        newly_pruned += int(active_a)
-                        layer.mask[:, a_col] = 0.0
-                        layer.weights[:, a_col] = torch.complex(
-                            torch.zeros_like(layer.weights.real[:, a_col]),
-                            torch.zeros_like(layer.weights.imag[:, a_col]),
-                        )
-                    if active_b > 0:
-                        newly_pruned += int(active_b)
-                        layer.mask[:, b_col] = 0.0
-                        layer.weights[:, b_col] = torch.complex(
-                            torch.zeros_like(layer.weights.real[:, b_col]),
-                            torch.zeros_like(layer.weights.imag[:, b_col]),
-                        )
-
-            req_in_this_layer = torch.zeros(layer.n_input_fields, dtype=torch.bool, device=layer.weights.device)
-
-            for k in range(layer.n_unary_ops):
-                if not bool(req_out[k].item()):
-                    continue
-                col = k
-                keep_col = active_edge_mask(layer.weights[:, col], layer.mask[:, col])
-                drop_col = (layer.mask[:, col] > 0.5) & (~keep_col)
-                if drop_col.any():
-                    newly_pruned += int(drop_col.sum().item())
-                    layer.mask[drop_col, col] = 0.0
-                    layer.weights[drop_col, col] = torch.complex(
-                        torch.zeros_like(layer.weights.real[drop_col, col]),
-                        torch.zeros_like(layer.weights.imag[drop_col, col]),
-                    )
-                req_in_this_layer |= keep_col
-
-            for i in range(layer.n_binary_ops):
-                out_idx = layer.n_unary_ops + i
-                if not bool(req_out[out_idx].item()):
-                    continue
-                a_col = layer.n_unary_ops + 2 * i
-                b_col = a_col + 1
-
-                keep_a = active_edge_mask(layer.weights[:, a_col], layer.mask[:, a_col])
-                keep_b = active_edge_mask(layer.weights[:, b_col], layer.mask[:, b_col])
-
-                drop_a = (layer.mask[:, a_col] > 0.5) & (~keep_a)
-                drop_b = (layer.mask[:, b_col] > 0.5) & (~keep_b)
-
-                if drop_a.any():
-                    newly_pruned += int(drop_a.sum().item())
-                    layer.mask[drop_a, a_col] = 0.0
-                    layer.weights[drop_a, a_col] = torch.complex(
-                        torch.zeros_like(layer.weights.real[drop_a, a_col]),
-                        torch.zeros_like(layer.weights.imag[drop_a, a_col]),
-                    )
-                if drop_b.any():
-                    newly_pruned += int(drop_b.sum().item())
-                    layer.mask[drop_b, b_col] = 0.0
-                    layer.weights[drop_b, b_col] = torch.complex(
-                        torch.zeros_like(layer.weights.real[drop_b, b_col]),
-                        torch.zeros_like(layer.weights.imag[drop_b, b_col]),
-                    )
-
-                req_in_this_layer |= (keep_a | keep_b)
-
-            layer.weights.data = nan_to_num_complex(layer.weights.data, nan=0.0, posinf=0.0, neginf=0.0)
-
-            if layer_idx == 0:
-                break
-            req_h_next = req_in_this_layer[n0:]
-
-        return newly_pruned
-
-    @torch.no_grad()
     def cascade_cleanup_disconnected_(self) -> int:
-        """
-        Remove (mask=0, weight=0) any edges/nodes that do not contribute
-        to the final output, given the CURRENT masks.
-
-        This is the 'levitating nodes' cleanup after any pruning step.
-        It does NOT consider magnitudes or thresholds.
-        """
         n0 = int(self.cfg.n_input_fields)
         L = len(self.symbolic_layers)
-
         newly_pruned = 0
 
-        # -------------------------
-        # 1) Determine which assembly inputs are required (active)
-        # -------------------------
-        asm_m = (self.assembly_layer.mask[:, 0] > 0.5)  # shape (n0 + last_ops,)
-        # Required last-layer outputs are those assembly edges that connect to them
+        asm_m = (self.assembly_layer.mask[:, 0] > 0.5)
         last_ops = self.symbolic_layers[-1].n_ops
-        req_h_next = asm_m[n0:n0 + last_ops].clone()     # shape (last_ops,)
+        req_h_next = asm_m[n0 : n0 + last_ops].clone()
 
-        # Note: we do NOT drop any assembly edges here; that is handled by your per-layer pruning.
-        # This function only removes upstream dead structure.
-
-        # -------------------------
-        # 2) Walk backward through symbolic layers
-        # -------------------------
         for layer_idx in range(L - 1, -1, -1):
             layer = self.symbolic_layers[layer_idx]
-
-            # req_out: which ops outputs of this layer are required by downstream
-            # shape (layer.n_ops,)
             req_out = req_h_next.clone()
 
-            # If an op output is NOT required, the entire operator output column(s) can be dropped:
-            #   - unary op k => column k
-            #   - binary op i => columns a_col, b_col
-            # This removes "dangling operator outputs".
-            # We only prune edges that are currently active.
             for k in range(layer.n_unary_ops):
                 if not bool(req_out[k].item()):
                     col = k
@@ -611,43 +510,30 @@ class ComplexEQL(nn.Module):
                             torch.zeros_like(layer.weights.imag[active_b, b_col]),
                         )
 
-            # -------------------------
-            # 3) Determine which INPUTS to this layer are required
-            # -------------------------
-            # A given input feature j is required if it has any active edge into any required op output.
             req_in_this_layer = torch.zeros(layer.n_input_fields, dtype=torch.bool, device=layer.weights.device)
 
-            # unary outputs: column k
             for k in range(layer.n_unary_ops):
                 if not bool(req_out[k].item()):
                     continue
                 col = k
-                keep_edges = (layer.mask[:, col] > 0.5)  # after pruning above
-                req_in_this_layer |= keep_edges
+                req_in_this_layer |= (layer.mask[:, col] > 0.5)
 
-            # binary outputs: columns a_col and b_col
             for i in range(layer.n_binary_ops):
                 out_idx = layer.n_unary_ops + i
                 if not bool(req_out[out_idx].item()):
                     continue
                 a_col = layer.n_unary_ops + 2 * i
                 b_col = a_col + 1
-
-                keep_a = (layer.mask[:, a_col] > 0.5)
-                keep_b = (layer.mask[:, b_col] > 0.5)
-
-                req_in_this_layer |= (keep_a | keep_b)
+                req_in_this_layer |= (layer.mask[:, a_col] > 0.5) | (layer.mask[:, b_col] > 0.5)
 
             layer.weights.data = nan_to_num_complex(layer.weights.data, nan=0.0, posinf=0.0, neginf=0.0)
 
-            # For the previous layer, required outputs are exactly the "h" part of this layer's inputs.
-            # Inputs to layer are [x0 (n0), h_prev (...)]
             if layer_idx == 0:
                 break
             req_h_next = req_in_this_layer[n0:]
 
         return newly_pruned
-    
+
     @torch.no_grad()
     def normalize_all_divisions_(self, eps: float = 1e-12) -> int:
         total = 0

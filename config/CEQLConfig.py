@@ -54,7 +54,7 @@ class ModelTrainingConfig:
 
     # ---- End-of-cycle pruning
     pruning_fraction_cycle = 0.2
-    pruning_min_edges_total = 20
+    pruning_min_edges_per_layer = 10
 
     # ---- Small imag(weights) penalty applied throughout cycles
     imag_w_coeff_cycle = 1e-3
@@ -65,7 +65,7 @@ class ModelTrainingConfig:
 
     # 1) sparsity OFF, imag penalty ON, ramp r from r_start_post -> r_end_post (log)
     post_ramp_epochs = 10000
-    r_start_post = 0.01
+    r_start_post = 0.1
     r_end_post = 1.0
 
     # 2) r fixed at 1.0 for final optimization; scheduler ON here
@@ -79,19 +79,19 @@ class CEQLConfig:
     device = ModelTrainingConfig.device
     no_params_list = [
         [
-            {"op": "id",    "type": "unary"},
-            {"op": "id",    "type": "unary"},
-            {"op": "const", "type": "unary"},
-            {"op": "square","type": "unary"},
-            {"op": "sqrt",  "type": "unary"},
-            {"op": "exp",   "type": "unary"},
+            # {"op": "id",    "type": "unary"},
+            # {"op": "id",    "type": "unary"},
+            # {"op": "const", "type": "unary"},
+            # {"op": "square","type": "unary"},
+            # {"op": "sqrt",  "type": "unary"},
+            # {"op": "exp",   "type": "unary"},
             {"op": "sin",   "type": "unary"},
-            {"op": "cos",   "type": "unary"},
-            {"op": "log",   "type": "unary"},
-            {"op": "tan",   "type": "unary"},
-            {"op": "tanh",  "type": "unary"},
-            {"op": "mul",   "type": "binary"},
-            {"op": "div",   "type": "binary"},
+            # {"op": "cos",   "type": "unary"},
+            # {"op": "log",   "type": "unary"},
+            # {"op": "tan",   "type": "unary"},
+            # {"op": "tanh",  "type": "unary"},
+            # {"op": "mul",   "type": "binary"},
+            # {"op": "div",   "type": "binary"},
         ],
     ]
 
