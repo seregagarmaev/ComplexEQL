@@ -184,6 +184,44 @@ class CEQLConfig:
     }
 
 
+@dataclass(frozen=True)
+class SINDyConfig:
+    # Use the same operator sets as PySR
+    unary_ops: List[str] = ("sin", "cos", "tan", "tanh", "exp", "log", "sqrt")
+    binary_ops: List[str] = ("+", "-", "*", "/", "^")
+
+    # Polynomial library controls * and ^ (powers) coverage
+    poly_degree: int = 2
+    include_interaction: bool = True
+    include_bias: bool = True
+    max_library_features: int = 30
+
+    # Sparse optimizer (STLSQ)
+    threshold: float = 1e-2
+    alpha: float = 1e-6
+    max_iter: int = 50
+    normalize_columns: bool = True
+    stlsq_verbose: bool = True
+
+    # Numerics for unary ops
+    clip_exp: float = 50.0
+    log_eps: float = 1e-12
+    sqrt_abs: bool = True
+
+    # Numerics for division
+    div_eps: float = 1e-6
+
+    # Stabilize Theta(X)
+    max_feature_abs: float = 1e6
+    drop_nonfinite_rows: bool = True
+
+    # Readout / logging
+    coef_zero_tol: float = 1e-12
+    results_csv_path: str = "korns_sindy_benchmark_results.csv"
+
+
+
+SINDY = SINDyConfig()
 BENCH = KornsBenchmarkConfig()
 PYSR = PySRConfig()
 CEQL_TRAIN = CEQLModelTrainingConfig()
