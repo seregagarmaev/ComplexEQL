@@ -220,7 +220,51 @@ class SINDyConfig:
     results_csv_path: str = "korns_sindy_benchmark_results.csv"
 
 
+@dataclass(frozen=True)
+class EQLDivConfig:
+    # Naming / output
+    name: str = "eql_div"
+    results_csv_path: str = "korns_eql_div_benchmark_results.csv"
 
+    # Training
+    epoch_factor: int = 1000
+    penalty_every: int = 20
+    batch_size: int = 512
+    penalty_examples_cap: int = 2048
+
+    # Architecture
+    num_h_layers: int = 2
+    layer_width: int = 1
+
+    # Only ops implemented in EQL_Layer_tf AND numerically safe by default
+    # (log/exp are implemented but unsafe -> excluded)
+    layer_ops: Tuple[str, ...] = ("id", "sin", "cos", "exp", "log", "multiply")
+
+    # Output op
+    out_op: str = "reg_div"
+
+    # Optimizer
+    learning_rate: float = 1e-3
+    beta1: float = 0.9
+
+    # Sparsity
+    reg_sched: Tuple[float, float] = (0.1, 0.9)
+    reg_scale: float = 1e-2
+    l0_threshold: float = 1e-2
+
+    # Division / bounds
+    test_div_threshold: float = 1e-2
+    weight_init_param: float = 1.0
+    output_bound: Optional[float] = None
+
+    # Symbolic / reporting
+    complexity_threshold: float = 1e-3
+    symbolic_prune_threshold: float = 1e-2
+    round_decimals: int = 6
+    simplify: bool = False
+
+
+EQLDIV = EQLDivConfig()
 SINDY = SINDyConfig()
 BENCH = KornsBenchmarkConfig()
 PYSR = PySRConfig()

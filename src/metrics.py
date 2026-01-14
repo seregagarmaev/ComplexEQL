@@ -161,7 +161,7 @@ def compute_metrics(
     expr_pred: Optional[sp.Expr],
     feature_names: List[str],
 ) -> Metrics:
-    p, r, f1 = term_precision_recall_f1(expr_gt, expr_pred, feature_names)
+    p, r, f1 = 0.0, 0.0, 0.0 #term_precision_recall_f1(expr_gt, expr_pred, feature_names)
     return Metrics(
         nlse_test=nlse(y_test_true, y_test_pred),
         mse_test=mse(y_test_true, y_test_pred),
