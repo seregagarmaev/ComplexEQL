@@ -17,7 +17,7 @@ class KornsBenchmarkConfig:
     per_problem_seed_offset: int = 1000
     algo_seed_offset: int = 10_000
     run_seed_offset: int = 1_000_000
-    n_runs: int = 1 #5
+    n_runs: int = 5
 
 
 @dataclass(frozen=True)
