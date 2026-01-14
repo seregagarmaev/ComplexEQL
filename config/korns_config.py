@@ -228,7 +228,7 @@ class EQLDivConfig:
 
     # Training
     epoch_factor: int = 1000
-    penalty_every: int = 20
+    penalty_every: int = 10
     batch_size: int = 512
     penalty_examples_cap: int = 2048
 
