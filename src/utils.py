@@ -51,19 +51,20 @@ def linear_schedule(epoch: int, start: float, end: float, warmup: int) -> float:
     return float(start + (end - start) * t)
 
 
-def log_schedule(epoch: int, start: float, end: float, warmup: int, eps: float = 1e-12) -> float:
-    """
-    Log-space interpolation from start -> end over `warmup` epochs.
-    """
-    start = float(max(start, eps))
-    end = float(max(end, eps))
-    if warmup <= 0:
+def log_schedule(epoch: int, start: float, end: float, warmup: int, k: float = 9.0) -> float:
+    start = float(start)
+    end = float(end)
+
+    if warmup <= 1:
         return end
-    denom = float(max(warmup - 1, 1))
-    t = min(max(epoch, 0), warmup - 1) / denom
-    ls = math.log(start)
-    le = math.log(end)
-    return float(math.exp(ls + (le - ls) * t))
+
+    e = min(max(int(epoch), 0), warmup - 1)
+    t = e / float(warmup - 1)
+
+    k = float(max(k, 0.0))
+    s = t if k == 0.0 else math.log1p(k * t) / math.log1p(k)
+
+    return start + (end - start) * s
 
 
 def build_op_params(epoch: int, cfg) -> Optional[OpParams]:
@@ -327,8 +328,8 @@ def train(
         r_end = float(cfg.r_end_cycle)
 
         for e in range(ramp_epochs):
-            # r_val = log_schedule(e, r_start, r_end, ramp_epochs)
-            r_val = linear_schedule(e, r_start, r_end, ramp_epochs)
+            r_val = log_schedule(e, r_start, r_end, ramp_epochs)
+            # r_val = linear_schedule(e, r_start, r_end, ramp_epochs)
             op_params = build_trig_op_params(cfg, r_val)
 
             avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, _ = train_one_epoch(
@@ -405,6 +406,8 @@ def train(
             min_edges_per_layer=min_edges_layer,
             eps=1e-12,
         )
+        thr_min = float(getattr(cfg, "pruning_threshold_min", 0.0))
+        thr_max = float(getattr(cfg, "pruning_threshold_max", float("inf")))
 
         pruned_total = 0
 
@@ -412,6 +415,13 @@ def train(
         for li, (thr, k_to_prune, active_now) in enumerate(per_sym):
             if thr is None or k_to_prune <= 0 or active_now <= min_edges_layer:
                 continue
+
+            thr = float(thr)
+            if thr < thr_min:
+                thr = thr_min
+            if thr > thr_max:
+                thr = thr_max
+
             pruned_here = model.symbolic_layers[li].prune_by_threshold(thr)
             pruned_total += pruned_here
             if pruned_here > 0:
@@ -424,6 +434,12 @@ def train(
         # prune assembly independently
         thrA, kA, activeA = asm
         if thrA is not None and kA > 0 and activeA > min_edges_layer:
+            thrA = float(thrA)
+            if thrA < thr_min:
+                thrA = thr_min
+            if thrA > thr_max:
+                thrA = thr_max
+
             prunedA = model.assembly_layer.prune_by_threshold(thrA)
             pruned_total += prunedA
             if prunedA > 0:
@@ -465,8 +481,8 @@ def train(
 
     # Post ramp
     for e in range(post_ramp_epochs):
-        # r_val = log_schedule(e, r_start_post, r_end_post, post_ramp_epochs)
-        r_val = linear_schedule(e, r_start_post, r_end_post, post_ramp_epochs)
+        r_val = log_schedule(e, r_start_post, r_end_post, post_ramp_epochs)
+        # r_val = linear_schedule(e, r_start_post, r_end_post, post_ramp_epochs)
         op_params = build_trig_op_params(cfg, r_val)
 
         avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, _ = train_one_epoch(

@@ -17,7 +17,7 @@ class KornsBenchmarkConfig:
     per_problem_seed_offset: int = 1000
     algo_seed_offset: int = 10_000
     run_seed_offset: int = 1_000_000
-    n_runs: int = 5
+    n_runs: int = 1 #5
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,7 @@ class CEQLModelTrainingConfig:
     scheduler = "ReduceLROnPlateau"   # used ONLY in the final 10000 epochs
     schedulerparams = dict(mode="min", patience=1000, factor=0.1, min_lr=1e-8)
 
-    print_every = 500
+    print_every = 1000
 
     # -------------------------
     # L1 sparsity
@@ -66,7 +66,7 @@ class CEQLModelTrainingConfig:
     # Optional clamp (kept from utils behavior)
     # -------------------------
     clamp_pred = True
-    clamp_limit = 1e2
+    clamp_limit = 1e6
 
     # -------------------------
     # Trig control (r is driven by the cycle logic; schedules here are unused)
@@ -79,17 +79,19 @@ class CEQLModelTrainingConfig:
     # =========================================================
 
     # ---- Cycle stage A: ramp r from r_start_cycle -> r_end_cycle (log), no sparsity
-    cycle_ramp_epochs = 5000 #10000
+    cycle_ramp_epochs = 5000
     r_start_cycle = 0.01
     r_end_cycle = 1.0
 
     # ---- Cycle stage B: r fixed at 1.0, sparsity ON, division normalization after each epoch
-    cycle_sparsity_epochs = 5000 #10000
+    cycle_sparsity_epochs = 20000
     l1_reg_coeff_cycle = 1e-3 # applied to whole complex number, not real only. TODO: rename
     normalize_divisions_during_sparsity = True
 
     # ---- End-of-cycle pruning
-    pruning_fraction_cycle = 0.2
+    pruning_fraction_cycle = 0.5
+    pruning_threshold_min = 1e-2
+    pruning_threshold_max = 1e0
     pruning_min_edges_per_layer = 10
 
     # ---- Small imag(weights) penalty applied throughout cycles
@@ -108,7 +110,7 @@ class CEQLModelTrainingConfig:
     post_finetune_epochs = 10000
 
     # imag penalty during post stages (keep small)
-    imag_w_coeff_post = 1e-3
+    imag_w_coeff_post = 1e3
     
     
 
@@ -127,6 +129,9 @@ class CEQLConfig:
             {"op": "cos",   "type": "unary"},
             {"op": "log",   "type": "unary"},
             {"op": "tan",   "type": "unary"},
+            {"op": "tan",   "type": "unary"},
+            {"op": "tan",   "type": "unary"},
+            {"op": "tan",   "type": "unary"},
             {"op": "tanh",  "type": "unary"},
             {"op": "mul",   "type": "binary"},
             {"op": "div",   "type": "binary"},
@@ -144,6 +149,8 @@ class CEQLConfig:
             {"op": "tan",   "type": "unary"},
             {"op": "tanh",  "type": "unary"},
             {"op": "mul",   "type": "binary"},
+            {"op": "mul",   "type": "binary"},
+            {"op": "div",   "type": "binary"},
             {"op": "div",   "type": "binary"},
         ],
         [

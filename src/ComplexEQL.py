@@ -107,8 +107,8 @@ class SymbolicLayer(nn.Module):
         self.n_ops = self.n_unary_ops + self.n_binary_ops
         self.n_inputs = self.n_unary_ops + 2 * self.n_binary_ops
 
-        real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5)
-        imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5)
+        real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * 0.1**(3 - self.layer_number)
+        imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * 0.1**(3 - self.layer_number)
         self.weights = nn.Parameter(torch.complex(real, imag))
         self.mask = nn.Parameter(torch.ones_like(real), requires_grad=False)
 

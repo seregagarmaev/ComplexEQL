@@ -217,6 +217,12 @@ def run_benchmark(
         X_train, y_train = rec.X_train, rec.y_train
         X_test, y_test = rec.X_test, rec.y_test
 
+        # # TEMP: train on only 100 samples per problem
+        # rng = np.random.default_rng(config.split_seed + int(pid[1:]))
+        # idx = rng.choice(len(X_train), size=min(100, len(X_train)), replace=False)
+        # X_train = X_train[idx]
+        # y_train = y_train[idx]
+
         print("=" * 50)
         print(f"[PROBLEM] {pid}")
         print(f"[GT] {rec.expr_gt}")
