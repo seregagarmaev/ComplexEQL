@@ -190,7 +190,7 @@ def train_one_epoch(
 
     total_data_loss = 0.0
     total_reg_loss = 0.0
-    total_real_reg_loss = 0.0  # now: L1 reg (kept name for backward compatibility)
+    total_real_reg_loss = 0.0
     total_imag_w_reg_loss = 0.0
     total_loss = 0.0
     num_samples = 0
@@ -211,14 +211,11 @@ def train_one_epoch(
 
         data_loss = loss_fn(pred.real, y)
 
-        # L1 sparsity
         if l1_enabled and l1_coeff > 0.0:
             if l1_use_real_only:
-                # penalize only real-part weights (they are real tensors already)
                 reg_target = model.get_real_weights_list()
                 real_reg = l1_coeff * l1_penalty(reg_target, use_real_only=False, eps=l1_eps)
             else:
-                # penalize complex magnitude: |w| = sqrt(Re^2 + Im^2)
                 real_list = model.get_real_weights_list()
                 imag_list = model.get_imag_weights_list()
                 reg_target = [torch.complex(r, i) for r, i in zip(real_list, imag_list)]
@@ -226,7 +223,6 @@ def train_one_epoch(
         else:
             real_reg = torch.tensor(0.0, device=device)
 
-        # imag(weights) penalty
         if imag_weights_penalty_enabled and imag_weights_penalty_coeff > 0.0:
             imag_list = model.get_imag_weights_list()
             imag_w_reg_raw = sum((w**2).sum() for w in imag_list)
@@ -295,6 +291,34 @@ def train(
     opt = optimizer
     sch = scheduler
 
+    def _rebuild_optimizer_like(old_opt: torch.optim.Optimizer, new_model: torch.nn.Module) -> torch.optim.Optimizer:
+        if isinstance(old_opt, torch.optim.Adam):
+            return torch.optim.Adam(
+                new_model.parameters(),
+                lr=old_opt.param_groups[0]["lr"],
+                betas=old_opt.param_groups[0].get("betas", (0.9, 0.999)),
+                eps=old_opt.param_groups[0].get("eps", 1e-8),
+                weight_decay=old_opt.param_groups[0].get("weight_decay", 0.0),
+                amsgrad=old_opt.param_groups[0].get("amsgrad", False),
+            )
+        if isinstance(old_opt, torch.optim.AdamW):
+            return torch.optim.AdamW(
+                new_model.parameters(),
+                lr=old_opt.param_groups[0]["lr"],
+                betas=old_opt.param_groups[0].get("betas", (0.9, 0.999)),
+                eps=old_opt.param_groups[0].get("eps", 1e-8),
+                weight_decay=old_opt.param_groups[0].get("weight_decay", 0.01),
+                amsgrad=old_opt.param_groups[0].get("amsgrad", False),
+            )
+        raise ValueError(f"Unsupported optimizer type for rebuild: {type(old_opt)}")
+
+    def _rebuild_scheduler_like(old_sch, new_opt: torch.optim.Optimizer, cfg):
+        if old_sch is None:
+            return None
+        if isinstance(old_sch, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            return torch.optim.lr_scheduler.ReduceLROnPlateau(new_opt, **getattr(cfg, "schedulerparams", {}))
+        raise ValueError(f"Unsupported scheduler type for rebuild: {type(old_sch)}")
+
     def _record(avg_data: float, avg_imag_w_reg: float):
         sl0_weights.append(model.symbolic_layers[0].weights.detach().cpu().clone().numpy().copy())
         al_weights.append(model.assembly_layer.weights.detach().cpu().clone().numpy().copy())
@@ -315,21 +339,17 @@ def train(
     min_edges_layer = int(cfg.pruning_min_edges_per_layer)
     prune_fraction = float(cfg.pruning_fraction_cycle)
 
-    # -------------------------------------------------
-    # Repeat cycles until we reach min_edges
-    # -------------------------------------------------
     while True:
         sym_now, asm_now = model.count_active_edges_per_layer()
         if not (any(n > min_edges_layer for n in sym_now) or (asm_now > min_edges_layer)):
             break
-        # ===== Cycle Stage A: ramp r log from start->end, no sparsity
+
         ramp_epochs = int(cfg.cycle_ramp_epochs)
         r_start = float(cfg.r_start_cycle)
         r_end = float(cfg.r_end_cycle)
 
         for e in range(ramp_epochs):
             r_val = log_schedule(e, r_start, r_end, ramp_epochs)
-            # r_val = linear_schedule(e, r_start, r_end, ramp_epochs)
             op_params = build_trig_op_params(cfg, r_val)
 
             avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, _ = train_one_epoch(
@@ -361,7 +381,6 @@ def train(
             _record(avg_data, avg_imag_w)
             global_epoch += 1
 
-        # ===== Cycle Stage B: r=1.0, sparsity ON, division normalization each epoch
         spars_epochs = int(cfg.cycle_sparsity_epochs)
         op_params = build_trig_op_params(cfg, 1.0)
 
@@ -395,7 +414,6 @@ def train(
             _record(avg_data, avg_imag_w)
             global_epoch += 1
 
-        # ===== End-of-cycle pruning: PER-LAYER thresholds, PER-LAYER min edges
         min_edges_layer = int(cfg.pruning_min_edges_per_layer)
 
         before_total = model.count_active_edges()
@@ -411,7 +429,6 @@ def train(
 
         pruned_total = 0
 
-        # prune each symbolic layer independently
         for li, (thr, k_to_prune, active_now) in enumerate(per_sym):
             if thr is None or k_to_prune <= 0 or active_now <= min_edges_layer:
                 continue
@@ -431,7 +448,6 @@ def train(
                     f"active {before_sym[li]}->{int((model.symbolic_layers[li].mask > 0.5).sum().item())}"
                 )
 
-        # prune assembly independently
         thrA, kA, activeA = asm
         if thrA is not None and kA > 0 and activeA > min_edges_layer:
             thrA = float(thrA)
@@ -449,40 +465,38 @@ def train(
                     f"pruned={prunedA} (fraction={prune_fraction:g}, thr={thrA:g}) "
                     f"active {before_asm}->{afterA}"
                 )
-        
-        # After per-layer pruning, remove levitating/disconnected upstream structure
+
         cleaned = model.cascade_cleanup_disconnected_()
         if cleaned > 0:
             print(f"[CLEAN | cycle={cycle_idx}] cleaned_disconnected={cleaned}")
 
+        before_rebuild_total = model.count_active_edges()
+        model = model.rebuild_from_pruned().to(device)
+        opt = _rebuild_optimizer_like(opt, model)
+        sch = _rebuild_scheduler_like(sch, opt, cfg)
+
         after_total = model.count_active_edges()
         if pruned_total > 0:
             print(f"[PRUNE | cycle={cycle_idx}] pruned_total={pruned_total} active {before_total}->{after_total}")
+        else:
+            if after_total != before_rebuild_total:
+                print(f"[REBUILD | cycle={cycle_idx}] active {before_rebuild_total}->{after_total}")
 
         cycle_idx += 1
 
-        # Stop cycling if no layer can prune any further (given min per-layer)
         sym_now, asm_now = model.count_active_edges_per_layer()
         can_prune_more = any(n > min_edges_layer for n in sym_now) or (asm_now > min_edges_layer)
         if (pruned_total == 0) or (not can_prune_more):
             break
 
-    # -------------------------------------------------
-    # Post-cycle finishing:
-    #   - sparsity OFF, imag penalty small
-    #   - r ramp 0.01->1.0 for 10k
-    #   - r=1.0 for last 10k with scheduler ON
-    # -------------------------------------------------
     post_ramp_epochs = int(cfg.post_ramp_epochs)
     post_finetune_epochs = int(cfg.post_finetune_epochs)
 
     r_start_post = float(cfg.r_start_post)
     r_end_post = float(cfg.r_end_post)
 
-    # Post ramp
     for e in range(post_ramp_epochs):
         r_val = log_schedule(e, r_start_post, r_end_post, post_ramp_epochs)
-        # r_val = linear_schedule(e, r_start_post, r_end_post, post_ramp_epochs)
         op_params = build_trig_op_params(cfg, r_val)
 
         avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, _ = train_one_epoch(
@@ -514,7 +528,6 @@ def train(
         _record(avg_data, avg_imag_w)
         global_epoch += 1
 
-    # Final finetune with r=1.0 and scheduler ON
     op_params = build_trig_op_params(cfg, 1.0)
     for e in range(post_finetune_epochs):
         avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, _ = train_one_epoch(
@@ -544,7 +557,7 @@ def train(
 
         if sch is not None:
             try:
-                sch.step(avg_data)  # ReduceLROnPlateau
+                sch.step(avg_data)
             except TypeError:
                 sch.step()
 

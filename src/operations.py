@@ -238,7 +238,7 @@ BINARY_OPS = {
 }
 
 
-def load_models(cfg, layer_idx: int):
+def load_models(cfg, layer_idx: int, specs_override=None):
     """
     Expects cfg.no_params_list[layer_idx] like:
       [{"op":"sin","type":"unary"}, {"op":"div","type":"binary"}, ...]
@@ -246,7 +246,7 @@ def load_models(cfg, layer_idx: int):
     unary_nos: list[nn.Module] = []
     binary_nos: list[nn.Module] = []
 
-    specs = cfg.no_params_list[layer_idx]
+    specs = specs_override if specs_override is not None else cfg.no_params_list[layer_idx]
     for spec in specs:
         op = spec["op"]
         typ = spec["type"]

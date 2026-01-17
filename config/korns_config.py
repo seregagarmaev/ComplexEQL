@@ -79,19 +79,19 @@ class CEQLModelTrainingConfig:
     # =========================================================
 
     # ---- Cycle stage A: ramp r from r_start_cycle -> r_end_cycle (log), no sparsity
-    cycle_ramp_epochs = 5000
+    cycle_ramp_epochs = 50000
     r_start_cycle = 0.01
     r_end_cycle = 1.0
 
     # ---- Cycle stage B: r fixed at 1.0, sparsity ON, division normalization after each epoch
-    cycle_sparsity_epochs = 20000
+    cycle_sparsity_epochs = 50000
     l1_reg_coeff_cycle = 1e-3 # applied to whole complex number, not real only. TODO: rename
     normalize_divisions_during_sparsity = True
 
     # ---- End-of-cycle pruning
-    pruning_fraction_cycle = 0.5
-    pruning_threshold_min = 1e-2
-    pruning_threshold_max = 1e0
+    pruning_fraction_cycle = 0.3
+    pruning_threshold_min = 1e-6
+    pruning_threshold_max = 0.1
     pruning_min_edges_per_layer = 10
 
     # ---- Small imag(weights) penalty applied throughout cycles
@@ -119,53 +119,53 @@ class CEQLConfig:
     device = CEQLModelTrainingConfig.device
     no_params_list = [
         [
-            {"op": "id",    "type": "unary"},
-            {"op": "id",    "type": "unary"},
-            {"op": "const", "type": "unary"},
-            {"op": "square","type": "unary"},
-            {"op": "sqrt",  "type": "unary"},
-            {"op": "exp",   "type": "unary"},
-            {"op": "sin",   "type": "unary"},
-            {"op": "cos",   "type": "unary"},
-            {"op": "log",   "type": "unary"},
+            # {"op": "id",    "type": "unary"},
+            # {"op": "id",    "type": "unary"},
+            # {"op": "const", "type": "unary"},
+            # {"op": "square","type": "unary"},
+            # {"op": "sqrt",  "type": "unary"},
+            # {"op": "exp",   "type": "unary"},
+            # {"op": "sin",   "type": "unary"},
+            # {"op": "cos",   "type": "unary"},
+            # {"op": "log",   "type": "unary"},
             {"op": "tan",   "type": "unary"},
             {"op": "tan",   "type": "unary"},
             {"op": "tan",   "type": "unary"},
             {"op": "tan",   "type": "unary"},
-            {"op": "tanh",  "type": "unary"},
-            {"op": "mul",   "type": "binary"},
-            {"op": "div",   "type": "binary"},
+            # {"op": "tanh",  "type": "unary"},
+            # {"op": "mul",   "type": "binary"},
+            # {"op": "div",   "type": "binary"},
         ],
         [
-            {"op": "id",    "type": "unary"},
-            {"op": "id",    "type": "unary"},
-            {"op": "const", "type": "unary"},
-            {"op": "square","type": "unary"},
-            {"op": "sqrt",  "type": "unary"},
-            {"op": "exp",   "type": "unary"},
-            {"op": "sin",   "type": "unary"},
-            {"op": "cos",   "type": "unary"},
-            {"op": "log",   "type": "unary"},
-            {"op": "tan",   "type": "unary"},
-            {"op": "tanh",  "type": "unary"},
+            # {"op": "id",    "type": "unary"},
+            # {"op": "id",    "type": "unary"},
+            # {"op": "const", "type": "unary"},
+            # {"op": "square","type": "unary"},
+            # {"op": "sqrt",  "type": "unary"},
+            # {"op": "exp",   "type": "unary"},
+            # {"op": "sin",   "type": "unary"},
+            # {"op": "cos",   "type": "unary"},
+            # {"op": "log",   "type": "unary"},
+            # {"op": "tan",   "type": "unary"},
+            # {"op": "tanh",  "type": "unary"},
             {"op": "mul",   "type": "binary"},
             {"op": "mul",   "type": "binary"},
-            {"op": "div",   "type": "binary"},
-            {"op": "div",   "type": "binary"},
+            # {"op": "div",   "type": "binary"},
+            # {"op": "div",   "type": "binary"},
         ],
         [
-            {"op": "id",    "type": "unary"},
-            {"op": "id",    "type": "unary"},
+            # {"op": "id",    "type": "unary"},
+            # {"op": "id",    "type": "unary"},
             {"op": "const", "type": "unary"},
-            {"op": "square","type": "unary"},
-            {"op": "sqrt",  "type": "unary"},
-            {"op": "exp",   "type": "unary"},
-            {"op": "sin",   "type": "unary"},
-            {"op": "cos",   "type": "unary"},
-            {"op": "log",   "type": "unary"},
-            {"op": "tan",   "type": "unary"},
-            {"op": "tanh",  "type": "unary"},
-            {"op": "mul",   "type": "binary"},
+            # {"op": "square","type": "unary"},
+            # {"op": "sqrt",  "type": "unary"},
+            # {"op": "exp",   "type": "unary"},
+            # {"op": "sin",   "type": "unary"},
+            # {"op": "cos",   "type": "unary"},
+            # {"op": "log",   "type": "unary"},
+            # {"op": "tan",   "type": "unary"},
+            # {"op": "tanh",  "type": "unary"},
+            # {"op": "mul",   "type": "binary"},
             {"op": "div",   "type": "binary"},
         ],
     ]

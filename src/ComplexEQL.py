@@ -91,13 +91,13 @@ def _is_exact_zero(e: sp.Expr) -> bool:
 
 
 class SymbolicLayer(nn.Module):
-    def __init__(self, cfg, layer_number: int, n_input_fields: int) -> None:
+    def __init__(self, cfg, layer_number: int, n_input_fields: int, *, op_specs=None) -> None:
         super().__init__()
         self.cfg = cfg
         self.layer_number = layer_number
         self.n_input_fields = int(n_input_fields)
 
-        unary_ops, binary_ops = load_models(cfg, layer_number)
+        unary_ops, binary_ops = load_models(cfg, layer_number, specs_override=op_specs)
         self.unary_ops = nn.ModuleList(unary_ops)
         self.binary_ops = nn.ModuleList(binary_ops)
 
@@ -533,6 +533,130 @@ class ComplexEQL(nn.Module):
             req_h_next = req_in_this_layer[n0:]
 
         return newly_pruned
+
+    @torch.no_grad()
+    def _required_outputs_per_layer(self) -> list[torch.Tensor]:
+        n0 = int(self.cfg.n_input_fields)
+        L = len(self.symbolic_layers)
+
+        req_outs: list[torch.Tensor] = [None] * L  # each: (n_ops_old,) bool
+
+        asm_m = (self.assembly_layer.mask[:, 0] > 0.5)
+        last_ops = self.symbolic_layers[-1].n_ops
+        req_h_next = asm_m[n0 : n0 + last_ops].clone()          # required outputs of last layer
+        req_outs[L - 1] = req_h_next.clone()
+
+        for layer_idx in range(L - 1, 0, -1):
+            layer = self.symbolic_layers[layer_idx]
+            req_out = req_outs[layer_idx]                       # (layer.n_ops,) bool
+
+            req_in = torch.zeros(layer.n_input_fields, dtype=torch.bool, device=layer.weights.device)
+
+            # unary outputs
+            for k in range(layer.n_unary_ops):
+                if bool(req_out[k].item()):
+                    req_in |= (layer.mask[:, k] > 0.5)
+
+            # binary outputs
+            for i in range(layer.n_binary_ops):
+                out_idx = layer.n_unary_ops + i
+                if bool(req_out[out_idx].item()):
+                    a_col = layer.n_unary_ops + 2 * i
+                    b_col = a_col + 1
+                    req_in |= (layer.mask[:, a_col] > 0.5) | (layer.mask[:, b_col] > 0.5)
+
+            # previous layer outputs are the tail after x0
+            req_outs[layer_idx - 1] = req_in[n0:].clone()
+
+        return req_outs
+    
+    @torch.no_grad()
+    def rebuild_from_pruned(self) -> "ComplexEQL":
+        cfg = self.cfg
+        device = self.symbolic_layers[0].weights.device
+        dtype = self.symbolic_layers[0].weights.dtype
+        n0 = int(cfg.n_input_fields)
+        L = len(self.symbolic_layers)
+
+        req_outs = self._required_outputs_per_layer()
+
+        # For each layer we keep outputs (ops) required by downstream.
+        # We always keep all x0 rows (0..n0-1) to avoid changing input signature.
+        kept_out_indices_per_layer: list[list[int]] = []
+        for li, layer in enumerate(self.symbolic_layers):
+            req = req_outs[li]  # (n_ops_old,)
+            kept = [j for j in range(layer.n_ops) if bool(req[j].item())]
+            kept_out_indices_per_layer.append(kept)
+
+        new_layers: list[SymbolicLayer] = []
+        prev_kept_outputs_old: list[int] = []  # outputs of previous layer (old indices) that are kept
+
+        for li, old_layer in enumerate(self.symbolic_layers):
+            # rows: x0 always + kept previous outputs mapped into this layer's input rows
+            keep_rows = list(range(n0)) + [n0 + j for j in prev_kept_outputs_old]
+
+            # outputs to keep in this layer (old output indices)
+            kept_out = kept_out_indices_per_layer[li]
+
+            # split kept outputs into unary/binary indices
+            kept_unary = [k for k in kept_out if k < old_layer.n_unary_ops]
+            kept_binary_out = [k for k in kept_out if k >= old_layer.n_unary_ops]
+            kept_binary = [k - old_layer.n_unary_ops for k in kept_binary_out]  # binary op indices
+
+            # build op_specs override (preserve original op order among kept)
+            op_specs: list[dict] = []
+            for k in kept_unary:
+                op_specs.append({"op": old_layer.unary_ops[k].fname, "type": "unary"})
+            for i in kept_binary:
+                op_specs.append({"op": old_layer.binary_ops[i].fname, "type": "binary"})
+
+            # build kept column indices in old weights/mask:
+            # unary: col = k
+            # binary i: cols = n_unary_old + 2*i, n_unary_old + 2*i + 1
+            keep_cols: list[int] = []
+            for k in kept_unary:
+                keep_cols.append(k)
+            for i in kept_binary:
+                a_col = old_layer.n_unary_ops + 2 * i
+                keep_cols.append(a_col)
+                keep_cols.append(a_col + 1)
+
+            # instantiate new layer with reduced op set and reduced input fields
+            n_input_fields_new = len(keep_rows)
+            new_layer = SymbolicLayer(cfg, li, n_input_fields=n_input_fields_new, op_specs=op_specs).to(device)
+
+            # slice-copy weights and mask
+            w_new = old_layer.weights.data[keep_rows][:, keep_cols].to(device=device, dtype=dtype)
+            m_new = old_layer.mask.data[keep_rows][:, keep_cols].to(device=device, dtype=old_layer.mask.dtype)
+
+            new_layer.weights.data.copy_(w_new)
+            new_layer.mask.data.copy_(m_new)
+
+            new_layers.append(new_layer)
+
+            # update for next layer (kept outputs in THIS layer become prev_kept for next)
+            prev_kept_outputs_old = kept_out
+
+        # ----- assembly rebuild -----
+        old_last = self.symbolic_layers[-1]
+        last_kept_out = kept_out_indices_per_layer[-1]  # old indices
+        asm_keep_rows = list(range(n0)) + [n0 + j for j in last_kept_out]
+
+        new_model = ComplexEQL.__new__(ComplexEQL)
+        nn.Module.__init__(new_model)
+        new_model.cfg = cfg
+        new_model.symbolic_layers = nn.ModuleList(new_layers)
+
+        new_in_dim = n0 + len(last_kept_out)
+        new_model.assembly_layer = AssemblyLayer(cfg, new_in_dim).to(device)
+
+        wA_new = self.assembly_layer.weights.data[asm_keep_rows].to(device=device, dtype=self.assembly_layer.weights.dtype)
+        mA_new = self.assembly_layer.mask.data[asm_keep_rows].to(device=device, dtype=self.assembly_layer.mask.dtype)
+
+        new_model.assembly_layer.weights.data.copy_(wA_new)
+        new_model.assembly_layer.mask.data.copy_(mA_new)
+
+        return new_model
 
     @torch.no_grad()
     def normalize_all_divisions_(self, eps: float = 1e-12) -> int:
