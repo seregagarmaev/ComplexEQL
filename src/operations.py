@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 import torch
 import torch.nn as nn
 
@@ -62,14 +62,6 @@ def square_operation(x: torch.Tensor, **_) -> torch.Tensor:
     return y.unsqueeze(-1)
 
 
-def cube_operation(x: torch.Tensor, **_) -> torch.Tensor:
-    u = x.real
-    y_real = u * u * u
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    y = _sanitize_out(y)
-    return y.unsqueeze(-1)
-
-
 def log_operation(x: torch.Tensor, **_) -> torch.Tensor:
     z = torch.log(x)
     y_real = torch.abs(z)
@@ -79,8 +71,8 @@ def log_operation(x: torch.Tensor, **_) -> torch.Tensor:
 
 
 def sqrt_operation(x: torch.Tensor, **_) -> torch.Tensor:
-    z = torch.sqrt(x)                # complex sqrt if x is complex
-    y_real = torch.abs(z)            # |sqrt(x)| as a real scalar field
+    z = torch.sqrt(x)
+    y_real = torch.abs(z)
     y = torch.complex(y_real, torch.zeros_like(y_real))
     y = _sanitize_out(y)
     return y.unsqueeze(-1)
@@ -89,64 +81,6 @@ def sqrt_operation(x: torch.Tensor, **_) -> torch.Tensor:
 def exponent_operation(x: torch.Tensor, **_) -> torch.Tensor:
     u = x.real
     y_real = torch.exp(u)
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    y = _sanitize_out(y)
-    return y.unsqueeze(-1)
-
-
-# real version (as you currently use): consumes only real part, returns complex with zero imag
-def sin_operation_surrogate(x: torch.Tensor, *, r: float, **_) -> torch.Tensor:
-    u = x.real
-    r = float(max(min(r, 1.0), 1e-12))
-
-    log_r = torch.log(torch.tensor(r, device=u.device, dtype=u.dtype))
-    phi = u.abs() # * u
-    damp = torch.exp(log_r * phi)
-    y_real = damp * torch.sin(u)
-
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    y = _sanitize_out(y)
-    return y.unsqueeze(-1)
-
-
-def cos_operation_surrogate(x: torch.Tensor, *, r: float, **_) -> torch.Tensor:
-    u = x.real
-    r = float(max(min(r, 1.0), 1e-12))
-
-    log_r = torch.log(torch.tensor(r, device=u.device, dtype=u.dtype))
-    phi = u.abs() # * u
-    damp = torch.exp(log_r * phi)
-    y_real = damp * torch.cos(u)
-
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    y = _sanitize_out(y)
-    return y.unsqueeze(-1)
-
-
-def tan_operation_surrogate(x: torch.Tensor, *, r: float, **_) -> torch.Tensor:
-    u = x.real
-    v = x.imag
-    r = float(max(min(r, 1.0), 1e-12))
-
-    log_r = torch.log(torch.tensor(r, device=u.device, dtype=u.dtype))
-    phi = u.abs()
-    damp = torch.exp(log_r * phi)
-
-    num_real = damp * torch.sin(u)
-    num = torch.complex(num_real, torch.zeros_like(num_real))
-
-    den_real = damp * torch.cos(u)
-    den = torch.complex(den_real, v)
-
-    y_real = (num / den).real
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    y = _sanitize_out(y)
-    return y.unsqueeze(-1)
-
-
-def tanh_operation(x: torch.Tensor, **_) -> torch.Tensor:
-    u = x.real
-    y_real = torch.tanh(u)
     y = torch.complex(y_real, torch.zeros_like(y_real))
     y = _sanitize_out(y)
     return y.unsqueeze(-1)
@@ -177,14 +111,10 @@ def div_operation(x1: torch.Tensor, x2: torch.Tensor, **_) -> torch.Tensor:
 # OP WRAPPERS
 # ======================
 
-OpParams = Dict[str, Dict[str, Any]]  # e.g. {"sin": {"r": 0.8}, "cos": {"r": 0.9}}
+OpParams = Dict[str, Dict[str, Any]]
 
 
 class UnarySurrogate(nn.Module):
-    """
-    Wrap an exact unary operation (no learnable params).
-    Routes op-specific runtime kwargs via `op_params[fname]`.
-    """
     def __init__(self, operation, cfg, fname: str):
         super().__init__()
         self.operation = operation
@@ -194,14 +124,10 @@ class UnarySurrogate(nn.Module):
 
     def forward(self, x: torch.Tensor, *, op_params: Optional[OpParams] = None) -> torch.Tensor:
         kwargs = (op_params or {}).get(self.fname, {})
-        return self.operation(x, **kwargs)  # operation decides what it needs
+        return self.operation(x, **kwargs)
 
 
 class BinarySurrogate(nn.Module):
-    """
-    Wrap an exact binary operation (no learnable params).
-    Routes op-specific runtime kwargs via `op_params[fname]`.
-    """
     def __init__(self, operation, cfg, fname: str):
         super().__init__()
         self.operation = operation
@@ -211,7 +137,7 @@ class BinarySurrogate(nn.Module):
 
     def forward(self, X: torch.Tensor, *, op_params: Optional[OpParams] = None) -> torch.Tensor:
         kwargs = (op_params or {}).get(self.fname, {})
-        return self.operation(X[:, 0], X[:, 1], **kwargs)  # (B,1)
+        return self.operation(X[:, 0], X[:, 1], **kwargs)
 
 
 # ======================
@@ -222,14 +148,9 @@ UNARY_OPS = {
     "id": identity_operation,
     "const": const_operation,
     "square": square_operation,
-    "cube": cube_operation,
     "sqrt": sqrt_operation,
     "log": log_operation,
     "exp": exponent_operation,
-    "sin": sin_operation_surrogate,
-    "cos": cos_operation_surrogate,
-    "tan": tan_operation_surrogate,
-    "tanh": tanh_operation,
 }
 
 BINARY_OPS = {
@@ -239,10 +160,6 @@ BINARY_OPS = {
 
 
 def load_models(cfg, layer_idx: int, specs_override=None):
-    """
-    Expects cfg.no_params_list[layer_idx] like:
-      [{"op":"sin","type":"unary"}, {"op":"div","type":"binary"}, ...]
-    """
     unary_nos: list[nn.Module] = []
     binary_nos: list[nn.Module] = []
 

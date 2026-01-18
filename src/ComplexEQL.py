@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 import numpy as np
 import sympy as sp
 import torch
@@ -11,19 +11,12 @@ from src.sympy_utils import prune_small_coeff_terms
 
 
 def _threshold_multiply(coef: sp.Number, val: sp.Expr, decimals: int) -> sp.Expr:
-    """
-    Multiply `coef * val` but snap to 0 if the rounded coefficient is 0.
-    No try/except: uses conservative numeric checks only.
-    """
-    # Evaluate coefficient numerically if possible
     c = sp.N(coef, max(16, decimals + 6))
     if c.is_number is True:
-        # Snap-to-zero threshold consistent with rounding_decimals
         thr = 0.5 * (10.0 ** (-int(decimals)))
         if abs(float(c)) < thr:
             return sp.Integer(0)
         return sp.N(coef * val, decimals)
-    # If not numeric, do not attempt rounding logic
     return coef * val
 
 
@@ -38,34 +31,21 @@ def nan_to_num_complex(
     return torch.nan_to_num(x, nan=nan, posinf=posinf, neginf=neginf)
 
 
-# -------------------------
-# Symbolic safety helpers (NO try/except)
-# -------------------------
 _BAD_SYMPY_ATOMS = (sp.oo, -sp.oo, sp.zoo, sp.nan)
 
 
 def _sanitize_symbolic(expr: Any) -> sp.Expr:
-    """
-    Replace any expression that becomes NaN/Inf/Zoo with 0.
-    No try/except: strict input handling.
-    """
     if expr is None:
         return sp.Integer(0)
-
-    # Accept plain Python scalars deterministically
     if isinstance(expr, bool):
         return sp.Integer(int(expr))
     if isinstance(expr, int):
         return sp.Integer(expr)
     if isinstance(expr, float):
-        # If you want, you can also map non-finite floats to 0 here.
         return sp.Float(expr)
-
-    # Only accept SymPy objects; do NOT sympify arbitrary objects (would require try/except).
     if not isinstance(expr, sp.Basic):
         return sp.Integer(0)
 
-    # Structural / property checks
     if expr.has(*_BAD_SYMPY_ATOMS):
         return sp.Integer(0)
     if getattr(expr, "is_infinite", None) is True:
@@ -77,10 +57,6 @@ def _sanitize_symbolic(expr: Any) -> sp.Expr:
 
 
 def _is_exact_zero(e: sp.Expr) -> bool:
-    """
-    Conservative exact-zero check (only returns True when certain).
-    No try/except.
-    """
     if not isinstance(e, sp.Basic):
         return False
     if e.is_zero is True:
@@ -94,10 +70,10 @@ class SymbolicLayer(nn.Module):
     def __init__(self, cfg, layer_number: int, n_input_fields: int, *, op_specs=None) -> None:
         super().__init__()
         self.cfg = cfg
-        self.layer_number = layer_number
+        self.layer_number = int(layer_number)
         self.n_input_fields = int(n_input_fields)
 
-        unary_ops, binary_ops = load_models(cfg, layer_number, specs_override=op_specs)
+        unary_ops, binary_ops = load_models(cfg, self.layer_number, specs_override=op_specs)
         self.unary_ops = nn.ModuleList(unary_ops)
         self.binary_ops = nn.ModuleList(binary_ops)
 
@@ -107,8 +83,9 @@ class SymbolicLayer(nn.Module):
         self.n_ops = self.n_unary_ops + self.n_binary_ops
         self.n_inputs = self.n_unary_ops + 2 * self.n_binary_ops
 
-        real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * 0.1**(3 - self.layer_number)
-        imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * 0.1**(3 - self.layer_number)
+        scale = 0.1 ** (3 - self.layer_number)
+        real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * scale
+        imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * scale
         self.weights = nn.Parameter(torch.complex(real, imag))
         self.mask = nn.Parameter(torch.ones_like(real), requires_grad=False)
 
@@ -122,7 +99,6 @@ class SymbolicLayer(nn.Module):
     ) -> List[sp.Expr]:
         outs: List[sp.Expr] = []
 
-        # unary: columns [0 .. n_unary_ops-1]
         for op_idx in range(self.n_unary_ops):
             op_name = self.function_names[op_idx]
             mixed: sp.Expr = sp.Integer(0)
@@ -136,18 +112,15 @@ class SymbolicLayer(nn.Module):
 
             op = self.functions_dict[op_name]
 
-            # Deterministic domain guards (no try/except)
             if op_name == "log":
                 symbolic_out = sp.Integer(0) if _is_exact_zero(mixed) else op(mixed)
             elif op_name == "sqrt":
-                # sqrt(0) is safe; other domains are left to SymPy and sanitized if it produces zoo/nan/oo
                 symbolic_out = sp.Integer(0) if _is_exact_zero(mixed) else op(mixed)
             else:
                 symbolic_out = op(mixed)
 
             outs.append(_sanitize_symbolic(symbolic_out))
 
-        # binary: each op uses two columns
         for i in range(self.n_binary_ops):
             op_name = self.function_names[self.n_unary_ops + i]
             op = self.functions_dict[op_name]
@@ -162,12 +135,15 @@ class SymbolicLayer(nn.Module):
                 w_b = self.weights[j, b_col].detach()
 
                 a += _threshold_multiply(sp.Float(float(w_a.real.cpu().item())), symbolic_inputs[j], rounding_decimals)
-                a += sp.I * _threshold_multiply(sp.Float(float(w_a.imag.cpu().item())), symbolic_inputs[j], rounding_decimals)
+                a += sp.I * _threshold_multiply(
+                    sp.Float(float(w_a.imag.cpu().item())), symbolic_inputs[j], rounding_decimals
+                )
 
                 b += _threshold_multiply(sp.Float(float(w_b.real.cpu().item())), symbolic_inputs[j], rounding_decimals)
-                b += sp.I * _threshold_multiply(sp.Float(float(w_b.imag.cpu().item())), symbolic_inputs[j], rounding_decimals)
+                b += sp.I * _threshold_multiply(
+                    sp.Float(float(w_b.imag.cpu().item())), symbolic_inputs[j], rounding_decimals
+                )
 
-            # Deterministic guards for division by exact zero
             if op_name == "div":
                 expr = sp.Integer(0) if _is_exact_zero(b) else (a / b)
                 outs.append(_sanitize_symbolic(expr))
@@ -443,12 +419,20 @@ class ComplexEQL(nn.Module):
         for layer in self.symbolic_layers:
             m = (layer.mask > 0.5)
             active_now = int(m.sum().item())
-            mags = layer.weights.abs()[m].reshape(-1) if active_now > 0 else torch.empty(0, device=layer.weights.device)
+            mags = (
+                layer.weights.abs()[m].reshape(-1)
+                if active_now > 0
+                else torch.empty(0, device=layer.weights.device)
+            )
             per_layer.append(_layer_threshold(mags, active_now))
 
         mA = (self.assembly_layer.mask > 0.5)
         activeA = int(mA.sum().item())
-        magsA = self.assembly_layer.weights.abs()[mA].reshape(-1) if activeA > 0 else torch.empty(0, device=self.assembly_layer.weights.device)
+        magsA = (
+            self.assembly_layer.weights.abs()[mA].reshape(-1)
+            if activeA > 0
+            else torch.empty(0, device=self.assembly_layer.weights.device)
+        )
         asm_tuple = _layer_threshold(magsA, activeA)
 
         return per_layer, asm_tuple
@@ -539,25 +523,23 @@ class ComplexEQL(nn.Module):
         n0 = int(self.cfg.n_input_fields)
         L = len(self.symbolic_layers)
 
-        req_outs: list[torch.Tensor] = [None] * L  # each: (n_ops_old,) bool
+        req_outs: list[torch.Tensor] = [None] * L
 
         asm_m = (self.assembly_layer.mask[:, 0] > 0.5)
         last_ops = self.symbolic_layers[-1].n_ops
-        req_h_next = asm_m[n0 : n0 + last_ops].clone()          # required outputs of last layer
+        req_h_next = asm_m[n0 : n0 + last_ops].clone()
         req_outs[L - 1] = req_h_next.clone()
 
         for layer_idx in range(L - 1, 0, -1):
             layer = self.symbolic_layers[layer_idx]
-            req_out = req_outs[layer_idx]                       # (layer.n_ops,) bool
+            req_out = req_outs[layer_idx]
 
             req_in = torch.zeros(layer.n_input_fields, dtype=torch.bool, device=layer.weights.device)
 
-            # unary outputs
             for k in range(layer.n_unary_ops):
                 if bool(req_out[k].item()):
                     req_in |= (layer.mask[:, k] > 0.5)
 
-            # binary outputs
             for i in range(layer.n_binary_ops):
                 out_idx = layer.n_unary_ops + i
                 if bool(req_out[out_idx].item()):
@@ -565,54 +547,62 @@ class ComplexEQL(nn.Module):
                     b_col = a_col + 1
                     req_in |= (layer.mask[:, a_col] > 0.5) | (layer.mask[:, b_col] > 0.5)
 
-            # previous layer outputs are the tail after x0
             req_outs[layer_idx - 1] = req_in[n0:].clone()
 
         return req_outs
-    
+
     @torch.no_grad()
     def rebuild_from_pruned(self) -> "ComplexEQL":
         cfg = self.cfg
         device = self.symbolic_layers[0].weights.device
         dtype = self.symbolic_layers[0].weights.dtype
         n0 = int(cfg.n_input_fields)
-        L = len(self.symbolic_layers)
 
         req_outs = self._required_outputs_per_layer()
 
-        # For each layer we keep outputs (ops) required by downstream.
-        # We always keep all x0 rows (0..n0-1) to avoid changing input signature.
         kept_out_indices_per_layer: list[list[int]] = []
         for li, layer in enumerate(self.symbolic_layers):
-            req = req_outs[li]  # (n_ops_old,)
+            req = req_outs[li]
             kept = [j for j in range(layer.n_ops) if bool(req[j].item())]
             kept_out_indices_per_layer.append(kept)
 
-        new_layers: list[SymbolicLayer] = []
-        prev_kept_outputs_old: list[int] = []  # outputs of previous layer (old indices) that are kept
+        # Drop trailing layers that keep no ops (these would create empty SymbolicLayer -> torch.cat([])).
+        last_nonempty = -1
+        for li, kept in enumerate(kept_out_indices_per_layer):
+            if len(kept) > 0:
+                last_nonempty = li
 
-        for li, old_layer in enumerate(self.symbolic_layers):
-            # rows: x0 always + kept previous outputs mapped into this layer's input rows
+        # If everything is empty, keep the first layer as a fallback (do NOT allow 0-layer model here).
+        # This preserves your existing forward/get_symbolic_expression assumptions.
+        if last_nonempty < 0:
+            last_nonempty = 0
+
+        # We will rebuild only up to last_nonempty (inclusive).
+        kept_out_indices_per_layer = kept_out_indices_per_layer[: last_nonempty + 1]
+        old_layers_to_rebuild = list(self.symbolic_layers[: last_nonempty + 1])
+
+        # NEW: ensure no rebuilt layer is empty; otherwise apply_operations() would torch.cat([]).
+        for li, kept in enumerate(kept_out_indices_per_layer):
+            if len(kept) == 0:
+                kept_out_indices_per_layer[li] = list(range(old_layers_to_rebuild[li].n_ops))
+
+        new_layers: list[SymbolicLayer] = []
+        prev_kept_outputs_old: list[int] = []
+
+        for li, old_layer in enumerate(old_layers_to_rebuild):
             keep_rows = list(range(n0)) + [n0 + j for j in prev_kept_outputs_old]
 
-            # outputs to keep in this layer (old output indices)
             kept_out = kept_out_indices_per_layer[li]
-
-            # split kept outputs into unary/binary indices
             kept_unary = [k for k in kept_out if k < old_layer.n_unary_ops]
             kept_binary_out = [k for k in kept_out if k >= old_layer.n_unary_ops]
-            kept_binary = [k - old_layer.n_unary_ops for k in kept_binary_out]  # binary op indices
+            kept_binary = [k - old_layer.n_unary_ops for k in kept_binary_out]
 
-            # build op_specs override (preserve original op order among kept)
             op_specs: list[dict] = []
             for k in kept_unary:
                 op_specs.append({"op": old_layer.unary_ops[k].fname, "type": "unary"})
             for i in kept_binary:
                 op_specs.append({"op": old_layer.binary_ops[i].fname, "type": "binary"})
 
-            # build kept column indices in old weights/mask:
-            # unary: col = k
-            # binary i: cols = n_unary_old + 2*i, n_unary_old + 2*i + 1
             keep_cols: list[int] = []
             for k in kept_unary:
                 keep_cols.append(k)
@@ -621,11 +611,9 @@ class ComplexEQL(nn.Module):
                 keep_cols.append(a_col)
                 keep_cols.append(a_col + 1)
 
-            # instantiate new layer with reduced op set and reduced input fields
             n_input_fields_new = len(keep_rows)
             new_layer = SymbolicLayer(cfg, li, n_input_fields=n_input_fields_new, op_specs=op_specs).to(device)
 
-            # slice-copy weights and mask
             w_new = old_layer.weights.data[keep_rows][:, keep_cols].to(device=device, dtype=dtype)
             m_new = old_layer.mask.data[keep_rows][:, keep_cols].to(device=device, dtype=old_layer.mask.dtype)
 
@@ -633,13 +621,10 @@ class ComplexEQL(nn.Module):
             new_layer.mask.data.copy_(m_new)
 
             new_layers.append(new_layer)
-
-            # update for next layer (kept outputs in THIS layer become prev_kept for next)
             prev_kept_outputs_old = kept_out
 
-        # ----- assembly rebuild -----
-        old_last = self.symbolic_layers[-1]
-        last_kept_out = kept_out_indices_per_layer[-1]  # old indices
+        old_last = old_layers_to_rebuild[-1]
+        last_kept_out = kept_out_indices_per_layer[-1]
         asm_keep_rows = list(range(n0)) + [n0 + j for j in last_kept_out]
 
         new_model = ComplexEQL.__new__(ComplexEQL)
@@ -650,8 +635,12 @@ class ComplexEQL(nn.Module):
         new_in_dim = n0 + len(last_kept_out)
         new_model.assembly_layer = AssemblyLayer(cfg, new_in_dim).to(device)
 
-        wA_new = self.assembly_layer.weights.data[asm_keep_rows].to(device=device, dtype=self.assembly_layer.weights.dtype)
-        mA_new = self.assembly_layer.mask.data[asm_keep_rows].to(device=device, dtype=self.assembly_layer.mask.dtype)
+        wA_new = self.assembly_layer.weights.data[asm_keep_rows].to(
+            device=device, dtype=self.assembly_layer.weights.dtype
+        )
+        mA_new = self.assembly_layer.mask.data[asm_keep_rows].to(
+            device=device, dtype=self.assembly_layer.mask.dtype
+        )
 
         new_model.assembly_layer.weights.data.copy_(wA_new)
         new_model.assembly_layer.mask.data.copy_(mA_new)

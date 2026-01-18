@@ -42,130 +42,84 @@ class CEQLModelTrainingConfig:
     loss_function = "MSELoss"
     train_batch_size = 2**14
 
-    # -------------------------
-    # Optimization
-    # -------------------------
     lr = 1e-3
-    scheduler = "ReduceLROnPlateau"   # used ONLY in the final 10000 epochs
+    scheduler = "ReduceLROnPlateau"
     schedulerparams = dict(mode="min", patience=1000, factor=0.1, min_lr=1e-8)
 
     print_every = 1000
 
-    # -------------------------
-    # L1 sparsity
-    # -------------------------
-    l1_on_real_only = False    # if True: penalize only Re(weights)
-    l1_eps = 1e-12             # only used for magnitude stability when complex
+    l1_on_real_only = False
+    l1_eps = 1e-12
 
-    # -------------------------
-    # Division normalization
-    # -------------------------
-    normalize_divisions_eps = 1e-12  # used during sparsity stage inside cycles
+    normalize_divisions_eps = 1e-12
 
-    # -------------------------
-    # Optional clamp (kept from utils behavior)
-    # -------------------------
     clamp_pred = True
     clamp_limit = 1e6
 
-    # -------------------------
-    # Trig control (r is driven by the cycle logic; schedules here are unused)
-    # -------------------------
-    use_op_params = True
-    op_param_schedules = {}  # r is set via build_trig_op_params(cfg, r_value)
+    use_op_params = False
+    op_param_schedules = {}
 
     # =========================================================
-    # Cycle-based training strategy
+    # Phase-based training strategy
     # =========================================================
 
-    # ---- Cycle stage A: ramp r from r_start_cycle -> r_end_cycle (log), no sparsity
-    cycle_ramp_epochs = 50000
-    r_start_cycle = 0.01
-    r_end_cycle = 1.0
+    # Phase 1: data + small L1(|w|) + small imag penalty
+    phase1_epochs = 50000
+    l1_reg_coeff_phase1 = 1e-4
+    imag_w_coeff_phase1 = 1e-4
 
-    # ---- Cycle stage B: r fixed at 1.0, sparsity ON, division normalization after each epoch
-    cycle_sparsity_epochs = 50000
-    l1_reg_coeff_cycle = 1e-3 # applied to whole complex number, not real only. TODO: rename
-    normalize_divisions_during_sparsity = True
+    # Phase 2: higher sparsity + periodic pruning (pruning logic stays in utils.train)
+    phase2_epochs = 50000
+    l1_reg_coeff_phase2 = 1e-3
+    imag_w_coeff_phase2 = 1e-4
 
-    # ---- End-of-cycle pruning
-    pruning_fraction_cycle = 0.3
-    pruning_threshold_min = 1e-6
+    pruning_fraction_phase2 = 0.2
+    pruning_threshold_min = 1e-2
     pruning_threshold_max = 0.1
     pruning_min_edges_per_layer = 10
+    phase2_prune_warmup_epochs = 0
+    prune_every_epochs = 5000
 
-    # ---- Small imag(weights) penalty applied throughout cycles
-    imag_w_coeff_cycle = 1e-3
+    normalize_divisions_during_phase2 = True
 
-    # =========================================================
-    # Post-cycle finishing strategy
-    # =========================================================
-
-    # 1) sparsity OFF, imag penalty ON, ramp r from r_start_post -> r_end_post (log)
-    post_ramp_epochs = 10000
-    r_start_post = 0.01
-    r_end_post = 1.0
-
-    # 2) r fixed at 1.0 for final optimization; scheduler ON here
-    post_finetune_epochs = 10000
-
-    # imag penalty during post stages (keep small)
-    imag_w_coeff_post = 1e3
-    
-    
+    # Phase 3: sparsity OFF, imag penalty bigger, data fit
+    phase3_epochs = 20000
+    l1_reg_coeff_phase3 = 0.0
+    imag_w_coeff_phase3 = 1e-2
 
 
 class CEQLConfig:
     device = CEQLModelTrainingConfig.device
+
     no_params_list = [
         [
-            # {"op": "id",    "type": "unary"},
-            # {"op": "id",    "type": "unary"},
-            # {"op": "const", "type": "unary"},
-            # {"op": "square","type": "unary"},
-            # {"op": "sqrt",  "type": "unary"},
-            # {"op": "exp",   "type": "unary"},
-            # {"op": "sin",   "type": "unary"},
-            # {"op": "cos",   "type": "unary"},
-            # {"op": "log",   "type": "unary"},
-            {"op": "tan",   "type": "unary"},
-            {"op": "tan",   "type": "unary"},
-            {"op": "tan",   "type": "unary"},
-            {"op": "tan",   "type": "unary"},
-            # {"op": "tanh",  "type": "unary"},
-            # {"op": "mul",   "type": "binary"},
-            # {"op": "div",   "type": "binary"},
-        ],
-        [
-            # {"op": "id",    "type": "unary"},
-            # {"op": "id",    "type": "unary"},
-            # {"op": "const", "type": "unary"},
-            # {"op": "square","type": "unary"},
-            # {"op": "sqrt",  "type": "unary"},
-            # {"op": "exp",   "type": "unary"},
-            # {"op": "sin",   "type": "unary"},
-            # {"op": "cos",   "type": "unary"},
-            # {"op": "log",   "type": "unary"},
-            # {"op": "tan",   "type": "unary"},
-            # {"op": "tanh",  "type": "unary"},
-            {"op": "mul",   "type": "binary"},
-            {"op": "mul",   "type": "binary"},
-            # {"op": "div",   "type": "binary"},
-            # {"op": "div",   "type": "binary"},
-        ],
-        [
-            # {"op": "id",    "type": "unary"},
-            # {"op": "id",    "type": "unary"},
+            {"op": "id",    "type": "unary"},
             {"op": "const", "type": "unary"},
-            # {"op": "square","type": "unary"},
-            # {"op": "sqrt",  "type": "unary"},
-            # {"op": "exp",   "type": "unary"},
-            # {"op": "sin",   "type": "unary"},
-            # {"op": "cos",   "type": "unary"},
-            # {"op": "log",   "type": "unary"},
-            # {"op": "tan",   "type": "unary"},
-            # {"op": "tanh",  "type": "unary"},
-            # {"op": "mul",   "type": "binary"},
+            {"op": "square","type": "unary"},
+            {"op": "sqrt",  "type": "unary"},
+            {"op": "exp",   "type": "unary"},
+            {"op": "log",   "type": "unary"},
+            {"op": "mul",   "type": "binary"},
+            {"op": "div",   "type": "binary"},
+        ],
+        [
+            {"op": "id",    "type": "unary"},
+            {"op": "const", "type": "unary"},
+            {"op": "square","type": "unary"},
+            {"op": "sqrt",  "type": "unary"},
+            {"op": "exp",   "type": "unary"},
+            {"op": "log",   "type": "unary"},
+            {"op": "mul",   "type": "binary"},
+            {"op": "div",   "type": "binary"},
+        ],
+        [
+            {"op": "id",    "type": "unary"},
+            {"op": "const", "type": "unary"},
+            {"op": "square","type": "unary"},
+            {"op": "sqrt",  "type": "unary"},
+            {"op": "exp",   "type": "unary"},
+            {"op": "log",   "type": "unary"},
+            {"op": "mul",   "type": "binary"},
             {"op": "div",   "type": "binary"},
         ],
     ]
@@ -181,10 +135,6 @@ class CEQLConfig:
         "cube":   lambda x: x**3,
         "sqrt":   lambda x: sp.sqrt(x),
         "exp":    lambda x: sp.exp(x),
-        "sin":    lambda x: sp.sin(x),
-        "cos":    lambda x: sp.cos(x),
-        "tan":    lambda x: sp.tan(x),
-        "tanh":   lambda x: sp.tanh(x),
         "log":    lambda x: sp.log(x),
         "mul":    lambda a, b: a * b,
         "div":    lambda a, b: a / b,
