@@ -104,6 +104,30 @@ def l1_penalty(
 
     return w.abs().sum()
 
+def l1_reg_fast(model: torch.nn.Module, *, use_real_only: bool, eps: float) -> torch.Tensor:
+    acc: torch.Tensor | None = None
+
+    for layer in model.symbolic_layers:
+        w = layer.weights * layer.mask.to(layer.weights.dtype)
+        term = w.real.abs().sum() if use_real_only else torch.sqrt(w.real * w.real + w.imag * w.imag + eps).sum()
+        acc = term if acc is None else (acc + term)
+
+    wA = model.assembly_layer.weights * model.assembly_layer.mask.to(model.assembly_layer.weights.dtype)
+    termA = wA.real.abs().sum() if use_real_only else torch.sqrt(wA.real * wA.real + wA.imag * wA.imag + eps).sum()
+    return termA if acc is None else (acc + termA)
+
+
+def imag_w_l2_reg_fast(model: torch.nn.Module) -> torch.Tensor:
+    acc: torch.Tensor | None = None
+
+    for layer in model.symbolic_layers:
+        w = layer.weights * layer.mask.to(layer.weights.dtype)
+        term = (w.imag * w.imag).sum()
+        acc = term if acc is None else (acc + term)
+
+    wA = model.assembly_layer.weights * model.assembly_layer.mask.to(model.assembly_layer.weights.dtype)
+    termA = (wA.imag * wA.imag).sum()
+    return termA if acc is None else (acc + termA)
 
 # -------------------------
 # Train one epoch
@@ -152,8 +176,8 @@ def train_one_epoch(
     num_samples = 0
 
     for _, (X, y) in enumerate(dataloader):
-        X = X.to(device)
-        y = y.to(device)
+        X = X.to(device, non_blocking=True)
+        y = y.to(device, non_blocking=True)
 
         optimizer.zero_grad(set_to_none=True)
 
@@ -168,29 +192,24 @@ def train_one_epoch(
         data_loss = loss_fn(pred.real, y)
 
         if l1_enabled and l1_coeff > 0.0:
-            if l1_use_real_only:
-                reg_target = model.get_real_weights_list()
-                real_reg = l1_coeff * l1_penalty(reg_target, use_real_only=False, eps=l1_eps)
-            else:
-                real_list = model.get_real_weights_list()
-                imag_list = model.get_imag_weights_list()
-                reg_target = [torch.complex(r, i) for r, i in zip(real_list, imag_list)]
-                real_reg = l1_coeff * l1_penalty(reg_target, use_real_only=False, eps=l1_eps)
+            real_reg = float(l1_coeff) * l1_reg_fast(
+                model,
+                use_real_only=bool(l1_use_real_only),
+                eps=float(l1_eps),
+            )
         else:
-            real_reg = torch.tensor(0.0, device=device)
+            real_reg = pred.real.new_tensor(0.0)
 
         if imag_weights_penalty_enabled and imag_weights_penalty_coeff > 0.0:
-            imag_list = model.get_imag_weights_list()
-            imag_w_reg_raw = sum((w**2).sum() for w in imag_list)
-            imag_w_reg = imag_weights_penalty_coeff * imag_w_reg_raw
+            imag_w_reg = float(imag_weights_penalty_coeff) * imag_w_l2_reg_fast(model)
         else:
-            imag_w_reg = torch.tensor(0.0, device=device)
+            imag_w_reg = pred.real.new_tensor(0.0)
 
         reg_loss = real_reg + imag_w_reg
         loss = data_loss + reg_loss
 
         loss.backward()
-        model.sanitize_gradients(max_grad=1e8)
+        # model.sanitize_gradients(max_grad=1e8)
         optimizer.step()
 
         bs = X.size(0)
@@ -206,7 +225,10 @@ def train_one_epoch(
         pruned = model.cascade_threshold_prunning(threshold=prune_threshold, eps=1e-12)
         after = model.count_active_edges()
         if pruned > 0:
-            print(f"[prune] Epoch {epoch}: pruned {pruned} edges (thr={prune_threshold:g}, active {before}->{after})")
+            print(
+                f"[prune] Epoch {epoch}: pruned {pruned} edges "
+                f"(thr={prune_threshold:g}, active {before}->{after})"
+            )
 
     if normalize_divisions:
         model.normalize_all_divisions_(eps=normalize_divisions_eps)
@@ -225,6 +247,7 @@ def train_one_epoch(
     )
 
 
+
 # -------------------------
 # Phase-based training
 # -------------------------
@@ -240,8 +263,8 @@ def train(
     device = torch.device(device)
     global_epoch = 0
 
-    sl0_weights, al_weights = [], []
-    data_losses, imag_w_losses = [], []
+    data_losses: list[float] = []
+    imag_w_losses: list[float] = []
 
     opt = optimizer
     sch = scheduler
@@ -275,10 +298,8 @@ def train(
         raise ValueError(f"Unsupported scheduler type for rebuild: {type(old_sch)}")
 
     def _record(avg_data: float, avg_imag_w_reg: float):
-        sl0_weights.append(model.symbolic_layers[0].weights.detach().cpu().clone().numpy().copy())
-        al_weights.append(model.assembly_layer.weights.detach().cpu().clone().numpy().copy())
-        data_losses.append(avg_data)
-        imag_w_losses.append(avg_imag_w_reg)
+        data_losses.append(float(avg_data))
+        imag_w_losses.append(float(avg_imag_w_reg))
 
     def _maybe_print(tag: str, avg_total: float, avg_data: float, avg_sparse: float, avg_imag_w: float):
         if (global_epoch + 1) % cfg.print_every == 0 or global_epoch == 0:
@@ -392,7 +413,6 @@ def train(
             imag_shrink_enabled=False,
             imag_shrink_coeff=1.0,
         )
-
         _maybe_print("PHASE1", avg_total, avg_data, avg_sparse, avg_imag_w)
         _record(avg_data, avg_imag_w)
         global_epoch += 1
@@ -430,7 +450,6 @@ def train(
             imag_shrink_enabled=False,
             imag_shrink_coeff=1.0,
         )
-
         _maybe_print("PHASE2", avg_total, avg_data, avg_sparse, avg_imag_w)
         _record(avg_data, avg_imag_w)
         global_epoch += 1
@@ -484,4 +503,4 @@ def train(
         _record(avg_data, avg_imag_w)
         global_epoch += 1
 
-    return model, (sl0_weights, al_weights, imag_w_losses, data_losses)
+    return model, (imag_w_losses, data_losses)

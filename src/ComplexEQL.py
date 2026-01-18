@@ -8,6 +8,7 @@ import torch.nn as nn
 
 from src.operations import OpParams, load_models
 from src.sympy_utils import prune_small_coeff_terms
+from src.operations import nan_to_num_complex, clamp_complex, CLAMP_VAL
 
 
 def _threshold_multiply(coef: sp.Number, val: sp.Expr, decimals: int) -> sp.Expr:
@@ -199,8 +200,12 @@ class SymbolicLayer(nn.Module):
 
     def prune_by_threshold(self, threshold: float) -> int:
         with torch.no_grad():
-            active = self.mask == 1.0
-            to_prune = active & (self.weights.abs() < threshold)
+            active = (self.mask == 1.0)
+
+            non_finite = (~torch.isfinite(self.weights.real)) | (~torch.isfinite(self.weights.imag))
+            small = (self.weights.abs() < threshold)
+
+            to_prune = active & (non_finite | small)
             num_pruned = int(to_prune.sum().item())
 
             self.mask[to_prune] = 0.0
@@ -214,17 +219,29 @@ class SymbolicLayer(nn.Module):
 
     def apply_operations(self, X: torch.Tensor, *, op_params: Optional[OpParams] = None) -> torch.Tensor:
         results: List[torch.Tensor] = []
+
+        # unary: contiguous slice per op
         for i, op in enumerate(self.unary_ops):
             results.append(op(X[:, i], op_params=op_params))
-        for i in range(self.n_binary_ops):
+
+        # binary: slice two columns, no stack
+        for i, op in enumerate(self.binary_ops):
             start = self.n_unary_ops + 2 * i
-            pair = torch.stack((X[:, start], X[:, start + 1]), dim=1)
-            results.append(self.binary_ops[i](pair, op_params=op_params))
+            results.append(op(X[:, start], X[:, start + 1], op_params=op_params))
+
         return torch.cat(results, dim=-1)
 
+    # def forward(self, X: torch.Tensor, *, op_params: Optional[OpParams] = None) -> torch.Tensor:
+    #     lifted = self.lift(X)
+    #     return self.apply_operations(lifted, op_params=op_params)
     def forward(self, X: torch.Tensor, *, op_params: Optional[OpParams] = None) -> torch.Tensor:
         lifted = self.lift(X)
-        return self.apply_operations(lifted, op_params=op_params)
+        out = self.apply_operations(lifted, op_params=op_params)
+
+        # sanitize ONCE per layer output
+        out = nan_to_num_complex(out, nan=0.0, posinf=0.0, neginf=0.0)
+        out = clamp_complex(out, -CLAMP_VAL, CLAMP_VAL)
+        return out
 
 
 class AssemblyLayer(nn.Module):
@@ -254,8 +271,12 @@ class AssemblyLayer(nn.Module):
 
     def prune_by_threshold(self, threshold: float) -> int:
         with torch.no_grad():
-            active = self.mask == 1.0
-            to_prune = active & (self.weights.abs() < threshold)
+            active = (self.mask == 1.0)
+
+            non_finite = (~torch.isfinite(self.weights.real)) | (~torch.isfinite(self.weights.imag))
+            small = (self.weights.abs() < threshold)
+
+            to_prune = active & (non_finite | small)
             num_pruned = int(to_prune.sum().item())
 
             self.mask[to_prune] = 0.0

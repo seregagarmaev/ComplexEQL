@@ -44,45 +44,41 @@ def _sanitize_out(y: torch.Tensor) -> torch.Tensor:
 
 def identity_operation(x: torch.Tensor, **_) -> torch.Tensor:
     y_real = x.real
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    y = _sanitize_out(y)
+    y = torch.complex(y_real, y_real.new_zeros(y_real.shape))
     return y.unsqueeze(-1)
 
 
 def const_operation(x: torch.Tensor, **_) -> torch.Tensor:
-    y = _sanitize_out(x * 0 + 1)
+    y = x.real.new_ones(x.real.shape)
+    y = torch.complex(y, y.new_zeros(y.shape))
     return y.unsqueeze(-1)
 
 
 def square_operation(x: torch.Tensor, **_) -> torch.Tensor:
     u = x.real
     y_real = u * u
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    y = _sanitize_out(y)
+    y = torch.complex(y_real, y_real.new_zeros(y_real.shape))
     return y.unsqueeze(-1)
 
 
 def log_operation(x: torch.Tensor, **_) -> torch.Tensor:
     z = torch.log(x)
     y_real = torch.abs(z)
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    y = _sanitize_out(y)
+    y = torch.complex(y_real, y_real.new_zeros(y_real.shape))
     return y.unsqueeze(-1)
 
 
 def sqrt_operation(x: torch.Tensor, **_) -> torch.Tensor:
     z = torch.sqrt(x)
     y_real = torch.abs(z)
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    y = _sanitize_out(y)
+    y = torch.complex(y_real, y_real.new_zeros(y_real.shape))
     return y.unsqueeze(-1)
 
 
 def exponent_operation(x: torch.Tensor, **_) -> torch.Tensor:
     u = x.real
     y_real = torch.exp(u)
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    y = _sanitize_out(y)
+    y = torch.complex(y_real, y_real.new_zeros(y_real.shape))
     return y.unsqueeze(-1)
 
 
@@ -91,19 +87,15 @@ def exponent_operation(x: torch.Tensor, **_) -> torch.Tensor:
 # ======================
 
 def multiplication_operation(x1: torch.Tensor, x2: torch.Tensor, **_) -> torch.Tensor:
-    a = x1.real
-    b = x2.real
-    y_real = a * b
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    y = _sanitize_out(y)
+    y_real = x1.real * x2.real
+    y = torch.complex(y_real, y_real.new_zeros(y_real.shape))
     return y.unsqueeze(-1)
 
 
 def div_operation(x1: torch.Tensor, x2: torch.Tensor, **_) -> torch.Tensor:
     q = x1.real / x2
     y_real = q.real
-    y = torch.complex(y_real, torch.zeros_like(y_real))
-    y = _sanitize_out(y)
+    y = torch.complex(y_real, y_real.new_zeros(y_real.shape))
     return y.unsqueeze(-1)
 
 
@@ -135,9 +127,9 @@ class BinarySurrogate(nn.Module):
         self.fname = fname
         self.ftype = "binary"
 
-    def forward(self, X: torch.Tensor, *, op_params: Optional[OpParams] = None) -> torch.Tensor:
+    def forward(self, x1: torch.Tensor, x2: torch.Tensor, *, op_params: Optional[OpParams] = None) -> torch.Tensor:
         kwargs = (op_params or {}).get(self.fname, {})
-        return self.operation(X[:, 0], X[:, 1], **kwargs)
+        return self.operation(x1, x2, **kwargs)
 
 
 # ======================
