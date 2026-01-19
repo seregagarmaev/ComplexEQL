@@ -97,6 +97,8 @@ class SymbolicLayer(nn.Module):
         self,
         symbolic_inputs: List[sp.Expr],
         rounding_decimals: int = 2,
+        *,
+        use_imag: bool = False,
     ) -> List[sp.Expr]:
         outs: List[sp.Expr] = []
 
@@ -107,9 +109,11 @@ class SymbolicLayer(nn.Module):
             for j in range(len(symbolic_inputs)):
                 w = self.weights[j, op_idx].detach()
                 coef_r = sp.Float(float(w.real.cpu().item()))
-                coef_i = sp.Float(float(w.imag.cpu().item()))
                 mixed += _threshold_multiply(coef_r, symbolic_inputs[j], rounding_decimals)
-                mixed += sp.I * _threshold_multiply(coef_i, symbolic_inputs[j], rounding_decimals)
+
+                if use_imag:
+                    coef_i = sp.Float(float(w.imag.cpu().item()))
+                    mixed += sp.I * _threshold_multiply(coef_i, symbolic_inputs[j], rounding_decimals)
 
             op = self.functions_dict[op_name]
 
@@ -136,14 +140,15 @@ class SymbolicLayer(nn.Module):
                 w_b = self.weights[j, b_col].detach()
 
                 a += _threshold_multiply(sp.Float(float(w_a.real.cpu().item())), symbolic_inputs[j], rounding_decimals)
-                a += sp.I * _threshold_multiply(
-                    sp.Float(float(w_a.imag.cpu().item())), symbolic_inputs[j], rounding_decimals
-                )
-
                 b += _threshold_multiply(sp.Float(float(w_b.real.cpu().item())), symbolic_inputs[j], rounding_decimals)
-                b += sp.I * _threshold_multiply(
-                    sp.Float(float(w_b.imag.cpu().item())), symbolic_inputs[j], rounding_decimals
-                )
+
+                if use_imag:
+                    a += sp.I * _threshold_multiply(
+                        sp.Float(float(w_a.imag.cpu().item())), symbolic_inputs[j], rounding_decimals
+                    )
+                    b += sp.I * _threshold_multiply(
+                        sp.Float(float(w_b.imag.cpu().item())), symbolic_inputs[j], rounding_decimals
+                    )
 
             if op_name == "div":
                 expr = sp.Integer(0) if _is_exact_zero(b) else (a / b)
@@ -238,7 +243,6 @@ class SymbolicLayer(nn.Module):
         lifted = self.lift(X)
         out = self.apply_operations(lifted, op_params=op_params)
 
-        # sanitize ONCE per layer output
         out = nan_to_num_complex(out, nan=0.0, posinf=0.0, neginf=0.0)
         out = clamp_complex(out, -CLAMP_VAL, CLAMP_VAL)
         return out
@@ -259,14 +263,19 @@ class AssemblyLayer(nn.Module):
         self,
         symbolic_inputs: List[sp.Expr],
         rounding_decimals: int = 2,
+        *,
+        use_imag: bool = False,
     ) -> sp.Expr:
         out: sp.Expr = sp.Integer(0)
         for i in range(len(symbolic_inputs)):
             w = self.weights[i, 0].detach()
             coef_r = sp.Float(float(w.real.cpu().item()))
-            coef_i = sp.Float(float(w.imag.cpu().item()))
             out += _threshold_multiply(coef_r, symbolic_inputs[i], rounding_decimals)
-            out += sp.I * _threshold_multiply(coef_i, symbolic_inputs[i], rounding_decimals)
+
+            if use_imag:
+                coef_i = sp.Float(float(w.imag.cpu().item()))
+                out += sp.I * _threshold_multiply(coef_i, symbolic_inputs[i], rounding_decimals)
+
         return _sanitize_symbolic(out)
 
     def prune_by_threshold(self, threshold: float) -> int:
@@ -318,14 +327,22 @@ class ComplexEQL(nn.Module):
         self,
         symbolic_inputs: List[sp.Expr],
         rounding_decimals: int = 2,
+        *,
+        use_imag: bool = False,
     ) -> sp.Expr:
         sym_x0: List[sp.Expr] = symbolic_inputs
-        sym_h: List[sp.Expr] = self.symbolic_layers[0].get_symbolic_output(sym_x0, rounding_decimals=rounding_decimals)
+        sym_h: List[sp.Expr] = self.symbolic_layers[0].get_symbolic_output(
+            sym_x0, rounding_decimals=rounding_decimals, use_imag=use_imag
+        )
 
         for layer in self.symbolic_layers[1:]:
-            sym_h = layer.get_symbolic_output(sym_x0 + sym_h, rounding_decimals=rounding_decimals)
+            sym_h = layer.get_symbolic_output(
+                sym_x0 + sym_h, rounding_decimals=rounding_decimals, use_imag=use_imag
+            )
 
-        sym_out = self.assembly_layer.get_symbolic_output(sym_x0 + sym_h, rounding_decimals=rounding_decimals)
+        sym_out = self.assembly_layer.get_symbolic_output(
+            sym_x0 + sym_h, rounding_decimals=rounding_decimals, use_imag=use_imag
+        )
         sym_out = _sanitize_symbolic(sym_out)
         return prune_small_coeff_terms(sym_out, rounding_decimals)
 

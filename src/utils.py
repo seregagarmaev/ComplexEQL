@@ -209,7 +209,7 @@ def train_one_epoch(
         loss = data_loss + reg_loss
 
         loss.backward()
-        # model.sanitize_gradients(max_grad=1e8)
+        model.sanitize_gradients(max_grad=1e8)
         optimizer.step()
 
         bs = X.size(0)

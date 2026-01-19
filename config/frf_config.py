@@ -5,7 +5,7 @@ import sympy as sp
 class CEQLModelTrainingConfig:
     device = "cpu"
     loss_function = "MSELoss"
-    train_batch_size = 1000 #2**14
+    train_batch_size = 10000 #2**14
     num_workers = 10
 
     lr = 1e-3
@@ -36,15 +36,15 @@ class CEQLModelTrainingConfig:
 
     # Phase 2: higher sparsity + periodic pruning (pruning logic stays in utils.train)
     phase2_epochs = 40000
-    l1_reg_coeff_phase2 = 1e-3
+    l1_reg_coeff_phase2 = 1e-1
     imag_w_coeff_phase2 = 1e-3
 
-    pruning_fraction_phase2 = 0.3
+    pruning_fraction_phase2 = 0.2
     pruning_threshold_min = 1e-3
-    pruning_threshold_max = 0.1
-    pruning_min_edges_per_layer = 10
+    pruning_threshold_max = 10.0
+    pruning_min_edges_per_layer = 6
     phase2_prune_warmup_epochs = 0
-    prune_every_epochs = 5000
+    prune_every_epochs = 2000
 
     normalize_divisions_during_phase2 = True
 
@@ -62,22 +62,24 @@ class CEQLConfig:
             {"op": "id",     "type": "unary"},
             {"op": "id",     "type": "unary"},
             {"op": "const",  "type": "unary"},
-            {"op": "const",  "type": "unary"},
-            {"op": "square", "type": "unary"},
             {"op": "square", "type": "unary"},
             {"op": "sqrt",   "type": "unary"},
+            {"op": "log",    "type": "unary"},
             {"op": "exp",    "type": "unary"},
-            {"op": "log",    "type": "unary"},
-            {"op": "log",    "type": "unary"},
-            {"op": "mul",    "type": "binary"},
-            {"op": "mul",    "type": "binary"},
             {"op": "mul",    "type": "binary"},
         ],
-            [
+        [
             {"op": "id",     "type": "unary"},
             {"op": "id",     "type": "unary"},
             {"op": "const",  "type": "unary"},
+            {"op": "square", "type": "unary"},
+            {"op": "sqrt",   "type": "unary"},
             {"op": "log",    "type": "unary"},
+            {"op": "exp",    "type": "unary"},
+            {"op": "mul",    "type": "binary"},
+        ],
+        [
+            {"op": "const",  "type": "unary"},
             {"op": "div",    "type": "binary"},
         ],
     ]
