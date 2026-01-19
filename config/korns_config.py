@@ -48,13 +48,13 @@ class CEQLModelTrainingConfig:
 
     print_every = 1000
 
-    l1_on_real_only = False
+    l1_on_real_only = True #
     l1_eps = 1e-12
 
     normalize_divisions_eps = 1e-12
 
     clamp_pred = True
-    clamp_limit = 1e6
+    clamp_limit = 1e10
 
     use_op_params = False
     op_param_schedules = {}
@@ -65,17 +65,19 @@ class CEQLModelTrainingConfig:
 
     # Phase 1: data + small L1(|w|) + small imag penalty
     phase1_epochs = 50000
-    l1_reg_coeff_phase1 = 1e-4
-    imag_w_coeff_phase1 = 1e-4
+    l1_reg_coeff_phase1 = 1e-10
+    imag_w_coeff_phase1 = 1e-10
+    phase1_prune_enabled = True
+    phase1_prune_threshold = 1e-3
 
     # Phase 2: higher sparsity + periodic pruning (pruning logic stays in utils.train)
     phase2_epochs = 50000
-    l1_reg_coeff_phase2 = 1e-3
-    imag_w_coeff_phase2 = 1e-4
+    l1_reg_coeff_phase2 = 1e-2
+    imag_w_coeff_phase2 = 1e-7
 
-    pruning_fraction_phase2 = 0.2
-    pruning_threshold_min = 1e-2
-    pruning_threshold_max = 0.1
+    pruning_fraction_phase2 = 0.3
+    pruning_threshold_min = 1e-5
+    pruning_threshold_max = 100.0
     pruning_min_edges_per_layer = 10
     phase2_prune_warmup_epochs = 0
     prune_every_epochs = 5000
@@ -122,6 +124,14 @@ class CEQLConfig:
             {"op": "mul",   "type": "binary"},
             {"op": "div",   "type": "binary"},
         ],
+        # [
+        #     {"op": "id",    "type": "unary"},
+        #     {"op": "div",   "type": "binary"},
+        # ],
+        # [
+        #     {"op": "const", "type": "unary"},
+        #     {"op": "div",   "type": "binary"},
+        # ],
     ]
 
     n_input_fields = 2
@@ -135,7 +145,7 @@ class CEQLConfig:
         "cube":   lambda x: x**3,
         "sqrt":   lambda x: sp.sqrt(x),
         "exp":    lambda x: sp.exp(x),
-        "log":    lambda x: sp.log(x),
+        "log":    lambda x: sp.log(x + 1.0),
         "mul":    lambda a, b: a * b,
         "div":    lambda a, b: a / b,
     }

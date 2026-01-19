@@ -85,8 +85,8 @@ class SymbolicLayer(nn.Module):
         self.n_inputs = self.n_unary_ops + 2 * self.n_binary_ops
 
         scale = 0.1 ** (3 - self.layer_number)
-        real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * scale
-        imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * scale
+        real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) #* scale
+        imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) #* scale
         self.weights = nn.Parameter(torch.complex(real, imag))
         self.mask = nn.Parameter(torch.ones_like(real), requires_grad=False)
 
@@ -203,6 +203,24 @@ class SymbolicLayer(nn.Module):
         effective = self.weights * self.mask.to(self.weights.dtype)
         return torch.matmul(X.to(effective.dtype), effective)
 
+    # def prune_by_threshold(self, threshold: float) -> int:
+    #     with torch.no_grad():
+    #         active = (self.mask == 1.0)
+
+    #         non_finite = (~torch.isfinite(self.weights.real)) | (~torch.isfinite(self.weights.imag))
+    #         small = (self.weights.abs() < threshold)
+
+    #         to_prune = active & (non_finite | small)
+    #         num_pruned = int(to_prune.sum().item())
+
+    #         self.mask[to_prune] = 0.0
+    #         self.weights[to_prune] = torch.complex(
+    #             torch.zeros_like(self.weights.real[to_prune]),
+    #             torch.zeros_like(self.weights.imag[to_prune]),
+    #         )
+    #         self.weights.data = nan_to_num_complex(self.weights.data, nan=0.0, posinf=0.0, neginf=0.0)
+
+    #     return num_pruned
     def prune_by_threshold(self, threshold: float) -> int:
         with torch.no_grad():
             active = (self.mask == 1.0)
@@ -213,11 +231,45 @@ class SymbolicLayer(nn.Module):
             to_prune = active & (non_finite | small)
             num_pruned = int(to_prune.sum().item())
 
+            # elementwise prune
             self.mask[to_prune] = 0.0
             self.weights[to_prune] = torch.complex(
                 torch.zeros_like(self.weights.real[to_prune]),
                 torch.zeros_like(self.weights.imag[to_prune]),
             )
+
+            # ------------------------------------------------------------
+            # SAFE DIVISION PRUNING:
+            # if denominator column becomes fully pruned -> drop whole div op
+            # by also pruning numerator column (so div output becomes 0).
+            # ------------------------------------------------------------
+            for i in range(self.n_binary_ops):
+                op_name = self.function_names[self.n_unary_ops + i]
+                if op_name != "div":
+                    continue
+
+                a_col = self.n_unary_ops + 2 * i
+                b_col = a_col + 1
+
+                b_active = (self.mask[:, b_col] > 0.5)
+                if not bool(b_active.any().item()):
+                    # drop whole operator: prune numerator column too
+                    a_active = (self.mask[:, a_col] > 0.5)
+
+                    # count additional prunes caused by the coupling
+                    num_pruned += int(a_active.sum().item())
+
+                    self.mask[:, a_col] = 0.0
+                    self.mask[:, b_col] = 0.0
+                    self.weights[:, a_col] = torch.complex(
+                        torch.zeros_like(self.weights.real[:, a_col]),
+                        torch.zeros_like(self.weights.imag[:, a_col]),
+                    )
+                    self.weights[:, b_col] = torch.complex(
+                        torch.zeros_like(self.weights.real[:, b_col]),
+                        torch.zeros_like(self.weights.imag[:, b_col]),
+                    )
+
             self.weights.data = nan_to_num_complex(self.weights.data, nan=0.0, posinf=0.0, neginf=0.0)
 
         return num_pruned

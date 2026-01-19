@@ -416,6 +416,42 @@ def train(
         _maybe_print("PHASE1", avg_total, avg_data, avg_sparse, avg_imag_w)
         _record(avg_data, avg_imag_w)
         global_epoch += 1
+    
+    # -------------------------
+    # END PHASE 1: normalize -> prune -> cleanup -> rebuild -> normalize
+    # -------------------------
+    phase1_prune_enabled = bool(getattr(cfg, "phase1_prune_enabled", True))
+    phase1_prune_thr = float(getattr(cfg, "phase1_prune_threshold", 0.0))
+
+    if phase1_prune_enabled and phase1_prune_thr > 0.0:
+        tag = "PHASE1_END"
+
+        # (1) normalize divisions first
+        model.normalize_all_divisions_(eps=float(getattr(cfg, "normalize_divisions_eps", 1e-12)))
+
+        before = model.count_active_edges()
+
+        # (2) prune by threshold (your SymbolicLayer.prune_by_threshold must include the div-safe coupling)
+        pruned = model.prune_by_threshold(phase1_prune_thr)
+
+        # (3) remove disconnected edges
+        cleaned = model.cascade_cleanup_disconnected_()
+
+        # (4) rebuild compact model + rebuild optimizer/scheduler
+        before_rebuild = model.count_active_edges()
+        model = model.rebuild_from_pruned().to(device)
+        opt = _rebuild_optimizer_like(opt, model)
+        sch = _rebuild_scheduler_like(sch, opt, cfg)
+
+        after = model.count_active_edges()
+
+        # (5) normalize again after structure changed
+        model.normalize_all_divisions_(eps=float(getattr(cfg, "normalize_divisions_eps", 1e-12)))
+
+        print(
+            f"[{tag}] thr={phase1_prune_thr:g} pruned={pruned} cleaned={cleaned} "
+            f"active {before}->{after} (pre_rebuild={before_rebuild})"
+        )
 
     # -------------------------
     # Phase 2
