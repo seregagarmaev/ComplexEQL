@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 
 # Global clamp for all operator outputs
-CLAMP_VAL = 1e15
+CLAMP_VAL = 1e10
 
 
 def nan_to_num_complex(
