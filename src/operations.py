@@ -98,6 +98,11 @@ def div_operation(x1: torch.Tensor, x2: torch.Tensor, **_) -> torch.Tensor:
     y = torch.complex(y_real, y_real.new_zeros(y_real.shape))
     return y.unsqueeze(-1)
 
+def resonator_operation(x1: torch.Tensor, x2: torch.Tensor, **_) -> torch.Tensor:
+    q = x1.real / (x2 * x2)
+    y_real = q.real
+    y = torch.complex(y_real, y_real.new_zeros(y_real.shape))
+    return y.unsqueeze(-1)
 
 # ======================
 # OP WRAPPERS
@@ -148,6 +153,7 @@ UNARY_OPS = {
 BINARY_OPS = {
     "mul": multiplication_operation,
     "div": div_operation,
+    "resonator": resonator_operation,
 }
 
 

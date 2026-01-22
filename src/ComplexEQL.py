@@ -66,6 +66,8 @@ def _is_exact_zero(e: sp.Expr) -> bool:
         return True
     return False
 
+_DIV_LIKE = {"div", "resonator"}
+
 
 class SymbolicLayer(nn.Module):
     def __init__(self, cfg, layer_number: int, n_input_fields: int, *, op_specs=None) -> None:
@@ -85,8 +87,8 @@ class SymbolicLayer(nn.Module):
         self.n_inputs = self.n_unary_ops + 2 * self.n_binary_ops
 
         scale = 0.1 ** (3 - self.layer_number)
-        real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * 0.1 #* scale
-        imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * 0.1 #* scale
+        real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) #* scale
+        imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) #* scale
         self.weights = nn.Parameter(torch.complex(real, imag))
         self.mask = nn.Parameter(torch.ones_like(real), requires_grad=False)
 
@@ -153,10 +155,19 @@ class SymbolicLayer(nn.Module):
             if op_name == "div":
                 expr = sp.Integer(0) if _is_exact_zero(b) else (a / b)
                 outs.append(_sanitize_symbolic(expr))
+            elif op_name == "resonator":
+                if _is_exact_zero(b):
+                    expr = sp.Integer(0)
+                else:
+                    expr = sp.Abs(sp.re(a / b))
+                outs.append(_sanitize_symbolic(expr))
             else:
                 outs.append(_sanitize_symbolic(op(a, b)))
 
         return outs
+
+    def _is_div_like(self, op_name: str) -> bool:
+        return op_name in _DIV_LIKE
 
     @torch.no_grad()
     def normalize_division_mixing_(self, eps: float = 1e-12) -> int:
@@ -166,7 +177,7 @@ class SymbolicLayer(nn.Module):
 
         for i in range(self.n_binary_ops):
             op_name = self.function_names[self.n_unary_ops + i]
-            if op_name != "div":
+            if not self._is_div_like(op_name):
                 continue
 
             a_col = self.n_unary_ops + 2 * i
@@ -245,7 +256,7 @@ class SymbolicLayer(nn.Module):
             # ------------------------------------------------------------
             for i in range(self.n_binary_ops):
                 op_name = self.function_names[self.n_unary_ops + i]
-                if op_name != "div":
+                if not self._is_div_like(op_name):
                     continue
 
                 a_col = self.n_unary_ops + 2 * i
