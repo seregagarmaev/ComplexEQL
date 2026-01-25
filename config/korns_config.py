@@ -40,21 +40,22 @@ class PySRConfig:
 class CEQLModelTrainingConfig:
     device = "cpu"
     loss_function = "MSELoss"
-    train_batch_size = 2**14
+    train_batch_size = 100 #2**14
 
     lr = 1e-3
     scheduler = "ReduceLROnPlateau"
-    schedulerparams = dict(mode="min", patience=1000, factor=0.1, min_lr=1e-8)
+    schedulerparams = dict(mode="min", patience=2000, factor=0.1, min_lr=1e-6)
 
     print_every = 1000
 
-    l1_on_real_only = True #
+    l1_on_real_only = False #
     l1_eps = 1e-12
 
     normalize_divisions_eps = 1e-12
 
     clamp_pred = True
     clamp_limit = 1e10
+    pred_abs_max = 1e18
 
     use_op_params = False
     op_param_schedules = {}
@@ -64,30 +65,30 @@ class CEQLModelTrainingConfig:
     # =========================================================
 
     # Phase 1: data + small L1(|w|) + small imag penalty
-    phase1_epochs = 50000
+    phase1_epochs = 100000
     l1_reg_coeff_phase1 = 1e-10
     imag_w_coeff_phase1 = 1e-10
     phase1_prune_enabled = True
     phase1_prune_threshold = 1e-3
 
     # Phase 2: higher sparsity + periodic pruning (pruning logic stays in utils.train)
-    phase2_epochs = 50000
-    l1_reg_coeff_phase2 = 1e-2
-    imag_w_coeff_phase2 = 1e-7
+    phase2_epochs = 100000
+    l1_reg_coeff_phase2 = 1e-3
+    imag_w_coeff_phase2 = 1e-10
 
     pruning_fraction_phase2 = 0.3
-    pruning_threshold_min = 1e-5
+    pruning_threshold_min = 1e-3
     pruning_threshold_max = 100.0
     pruning_min_edges_per_layer = 10
     phase2_prune_warmup_epochs = 0
-    prune_every_epochs = 5000
+    prune_every_epochs = 10000
 
     normalize_divisions_during_phase2 = True
 
     # Phase 3: sparsity OFF, imag penalty bigger, data fit
     phase3_epochs = 20000
-    l1_reg_coeff_phase3 = 0.0
-    imag_w_coeff_phase3 = 1e-2
+    l1_reg_coeff_phase3 = 1e-7 #0.0
+    imag_w_coeff_phase3 = 1e-3
 
 
 class CEQLConfig:
@@ -97,15 +98,7 @@ class CEQLConfig:
         [
             {"op": "id",    "type": "unary"},
             {"op": "const", "type": "unary"},
-            {"op": "square","type": "unary"},
-            {"op": "sqrt",  "type": "unary"},
-            {"op": "exp",   "type": "unary"},
-            {"op": "log",   "type": "unary"},
-            {"op": "mul",   "type": "binary"},
-            {"op": "div",   "type": "binary"},
-        ],
-        [
-            {"op": "id",    "type": "unary"},
+            {"op": "const", "type": "unary"},
             {"op": "const", "type": "unary"},
             {"op": "square","type": "unary"},
             {"op": "sqrt",  "type": "unary"},
@@ -117,21 +110,29 @@ class CEQLConfig:
         [
             {"op": "id",    "type": "unary"},
             {"op": "const", "type": "unary"},
+            {"op": "const", "type": "unary"},
+            {"op": "const", "type": "unary"},
             {"op": "square","type": "unary"},
             {"op": "sqrt",  "type": "unary"},
             {"op": "exp",   "type": "unary"},
             {"op": "log",   "type": "unary"},
             {"op": "mul",   "type": "binary"},
             {"op": "div",   "type": "binary"},
+            {"op": "div",   "type": "binary"},
         ],
-        # [
-        #     {"op": "id",    "type": "unary"},
-        #     {"op": "div",   "type": "binary"},
-        # ],
-        # [
-        #     {"op": "const", "type": "unary"},
-        #     {"op": "div",   "type": "binary"},
-        # ],
+        [
+            {"op": "id",    "type": "unary"},
+            {"op": "const", "type": "unary"},
+            {"op": "const", "type": "unary"},
+            {"op": "const", "type": "unary"},
+            {"op": "square","type": "unary"},
+            {"op": "sqrt",  "type": "unary"},
+            {"op": "exp",   "type": "unary"},
+            {"op": "log",   "type": "unary"},
+            {"op": "mul",   "type": "binary"},
+            {"op": "div",   "type": "binary"},
+            {"op": "div",   "type": "binary"},
+        ],
     ]
 
     n_input_fields = 2

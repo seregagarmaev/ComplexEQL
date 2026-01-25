@@ -129,6 +129,37 @@ def imag_w_l2_reg_fast(model: torch.nn.Module) -> torch.Tensor:
     termA = (wA.imag * wA.imag).sum()
     return termA if acc is None else (acc + termA)
 
+
+def finite_mask_pred_and_target(
+    pred: torch.Tensor,
+    y: torch.Tensor,
+    *,
+    pred_abs_max: float,
+) -> torch.Tensor:
+    # Finite check
+    if torch.is_complex(pred):
+        pred_finite = torch.isfinite(pred.real) & torch.isfinite(pred.imag)
+        # you train on pred.real, so bound that
+        pred_mag = pred.real.abs()
+    else:
+        pred_finite = torch.isfinite(pred)
+        pred_mag = pred.abs()
+
+    # Bound check (elementwise)
+    pred_ok = pred_finite & (pred_mag <= float(pred_abs_max))
+
+    # Reduce pred over non-batch dims to per-sample mask (B,)
+    while pred_ok.dim() > 1:
+        pred_ok = pred_ok.all(dim=-1)
+
+    # Target finite check
+    y_ok = torch.isfinite(y)
+    while y_ok.dim() > 1:
+        y_ok = y_ok.all(dim=-1)
+
+    return pred_ok & y_ok
+
+
 # -------------------------
 # Train one epoch
 # -------------------------
@@ -183,13 +214,14 @@ def train_one_epoch(
 
         pred = model(X, op_params=op_params_epoch)
 
-        if clamp_pred:
-            pred = torch.complex(
-                torch.clamp(pred.real, -clamp_limit, clamp_limit),
-                torch.clamp(pred.imag, -clamp_limit, clamp_limit),
-            )
+        pred_abs_max = float(getattr(cfg, "pred_abs_max", 1e18))
+        valid = finite_mask_pred_and_target(pred, y, pred_abs_max=pred_abs_max)
+        n_valid = int(valid.sum().item())
+        if n_valid == 0:
+            # skip this batch
+            continue
 
-        data_loss = loss_fn(pred.real, y)
+        data_loss = loss_fn(pred.real[valid], y[valid])
 
         if l1_enabled and l1_coeff > 0.0:
             real_reg = float(l1_coeff) * l1_reg_fast(
@@ -212,7 +244,7 @@ def train_one_epoch(
         model.sanitize_gradients(max_grad=1e8)
         optimizer.step()
 
-        bs = X.size(0)
+        bs = n_valid
         num_samples += bs
         total_data_loss += data_loss.item() * bs
         total_reg_loss += reg_loss.item() * bs
@@ -368,6 +400,10 @@ def train(
                     f"active {before_asm}->{afterA}"
                 )
 
+        dropped = model.drop_div_ops_with_pruned_denominator_()
+        if dropped > 0:
+            print(f"[DROP_DIV | {tag}] pruned_downstream_edges={dropped}")
+        
         cleaned = model.cascade_cleanup_disconnected_()
         if cleaned > 0:
             print(f"[CLEAN | {tag}] cleaned_disconnected={cleaned}")
@@ -408,7 +444,7 @@ def train(
             prune_threshold=0.0,
             normalize_divisions=False,
             normalize_divisions_eps=cfg.normalize_divisions_eps,
-            clamp_pred=getattr(cfg, "clamp_pred", True),
+            clamp_pred=getattr(cfg, "clamp_pred", False),
             clamp_limit=getattr(cfg, "clamp_limit", 1e15),
             imag_shrink_enabled=False,
             imag_shrink_coeff=1.0,
@@ -434,8 +470,9 @@ def train(
         # (2) prune by threshold (your SymbolicLayer.prune_by_threshold must include the div-safe coupling)
         pruned = model.prune_by_threshold(phase1_prune_thr)
 
-        # (3) remove disconnected edges
+        dropped = model.drop_div_ops_with_pruned_denominator_()
         cleaned = model.cascade_cleanup_disconnected_()
+
 
         # (4) rebuild compact model + rebuild optimizer/scheduler
         before_rebuild = model.count_active_edges()

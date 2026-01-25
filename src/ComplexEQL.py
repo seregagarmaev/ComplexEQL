@@ -86,8 +86,8 @@ class SymbolicLayer(nn.Module):
         self.n_ops = self.n_unary_ops + self.n_binary_ops
         self.n_inputs = self.n_unary_ops + 2 * self.n_binary_ops
 
-        scale = 0.1 ** (3 - self.layer_number)
-        real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) #* scale
+        scale = 0.1 ** (1 - self.layer_number)
+        real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * 0.5 #* scale
         imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) #* scale
         self.weights = nn.Parameter(torch.complex(real, imag))
         self.mask = nn.Parameter(torch.ones_like(real), requires_grad=False)
@@ -306,8 +306,6 @@ class SymbolicLayer(nn.Module):
         lifted = self.lift(X)
         out = self.apply_operations(lifted, op_params=op_params)
 
-        out = nan_to_num_complex(out, nan=0.0, posinf=0.0, neginf=0.0)
-        out = clamp_complex(out, -CLAMP_VAL, CLAMP_VAL)
         return out
 
 
@@ -317,8 +315,8 @@ class AssemblyLayer(nn.Module):
         self.cfg = cfg
         in_dim = int(in_dim)
 
-        real = (torch.rand(in_dim, 1) - 0.5)
-        imag = (torch.rand(in_dim, 1) - 0.5)
+        real = (torch.rand(in_dim, 1) - 0.5) * 0.1
+        imag = (torch.rand(in_dim, 1) - 0.5) * 0
         self.weights = nn.Parameter(torch.complex(real, imag))
         self.mask = nn.Parameter(torch.ones_like(real), requires_grad=False)
 
@@ -806,6 +804,70 @@ class ComplexEQL(nn.Module):
 
         w = self.assembly_layer.weights.data
         self.assembly_layer.weights.data = torch.complex(w.real, w.imag * coeff)
+
+    @torch.no_grad()
+    def drop_div_ops_with_pruned_denominator_(self) -> int:
+        """
+        If a div-like op has its denominator mixing column fully pruned (mask all zeros),
+        then remove that op from the graph by pruning downstream connections to its output.
+        Returns number of downstream edges pruned.
+        """
+        n0 = int(self.cfg.n_input_fields)
+        L = len(self.symbolic_layers)
+        pruned_downstream = 0
+
+        for li, layer in enumerate(self.symbolic_layers):
+            for bi in range(layer.n_binary_ops):
+                op_name = layer.function_names[layer.n_unary_ops + bi]
+                if op_name not in _DIV_LIKE:
+                    continue
+
+                a_col = layer.n_unary_ops + 2 * bi
+                b_col = a_col + 1
+
+                b_active = (layer.mask[:, b_col] > 0.5)
+                if bool(b_active.any().item()):
+                    continue  # denominator still has some incoming edges
+
+                # Ensure the whole operator is killed locally (numerator too).
+                # (Your prune_by_threshold already tries to do this, but doing it again is harmless.)
+                layer.mask[:, a_col] = 0.0
+                layer.mask[:, b_col] = 0.0
+                layer.weights[:, a_col] = torch.complex(
+                    torch.zeros_like(layer.weights.real[:, a_col]),
+                    torch.zeros_like(layer.weights.imag[:, a_col]),
+                )
+                layer.weights[:, b_col] = torch.complex(
+                    torch.zeros_like(layer.weights.real[:, b_col]),
+                    torch.zeros_like(layer.weights.imag[:, b_col]),
+                )
+
+                out_idx = layer.n_unary_ops + bi  # index in this layer's outputs
+
+                # Prune downstream consumers of this output:
+                if li < (L - 1):
+                    nxt = self.symbolic_layers[li + 1]
+                    row = n0 + out_idx  # next layer input is [x0, h_prev], so h_prev starts at n0
+                    active_row = (nxt.mask[row, :] > 0.5)
+                    if active_row.any():
+                        pruned_downstream += int(active_row.sum().item())
+                        nxt.mask[row, active_row] = 0.0
+                        nxt.weights[row, active_row] = torch.complex(
+                            torch.zeros_like(nxt.weights.real[row, active_row]),
+                            torch.zeros_like(nxt.weights.imag[row, active_row]),
+                        )
+                else:
+                    # last symbolic layer -> assembly consumes [x0, h_last]
+                    row = n0 + out_idx
+                    if bool((self.assembly_layer.mask[row, 0] > 0.5).item()):
+                        pruned_downstream += 1
+                        self.assembly_layer.mask[row, 0] = 0.0
+                        self.assembly_layer.weights[row, 0] = torch.complex(
+                            self.assembly_layer.weights.real[row, 0].new_zeros(()),
+                            self.assembly_layer.weights.imag[row, 0].new_zeros(()),
+                        )
+
+        return pruned_downstream
 
     def forward(self, x: torch.Tensor, *, op_params: Optional[OpParams] = None) -> torch.Tensor:
         x0 = x
