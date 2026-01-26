@@ -15,8 +15,8 @@ class DataConfig:
     test_domain_min_abs: float = 5.0
     test_domain_max_abs: float = 10.0
 
-    n_train: int = 10_000
-    n_test: int = 10_000
+    n_train: int = 1_000
+    n_test: int = 1_000
     d_list: tuple[int, ...] = (2, 4, 8, 16, 32, 64)
 
     out_path: str = "scalability_experiment_data.h5"
@@ -35,7 +35,7 @@ class OperonConfig:
     sym_decimals: int = 15
 
     # Reporting
-    report_csv_path: str = "reports/operon_scalability.csv"
+    report_csv_path: str = "reports/ceql_scalability.csv"
 
     # Plotting
     y_log_scale: bool = True
@@ -46,8 +46,8 @@ class OperonConfig:
     allowed_symbols: str = "add,sub,mul,square,constant,variable"
 
     # Evolution / search parameters
-    generations: int = 100
-    population_size: int = 100
+    generations: int = 1000
+    population_size: int = 1000
     max_length: int = 20
     max_depth: int = 10
 
@@ -66,16 +66,17 @@ class OperonConfig:
     print_best_expression: bool = True
 
 
+@dataclass
 class CEQLModelTrainingConfig:
-    device = "cpu"
+    device = "mps"
     loss_function = "MSELoss"
     train_batch_size = 2**14
 
     lr = 1e-3
     scheduler = "ReduceLROnPlateau"
-    schedulerparams = dict(mode="min", patience=2000, factor=0.1, min_lr=1e-6)
+    schedulerparams = dict(mode="min", patience=1000, factor=0.1, min_lr=1e-6)
 
-    print_every = 1000
+    print_every = 100
 
     l1_on_real_only = False #
     l1_eps = 1e-12
@@ -95,22 +96,22 @@ class CEQLModelTrainingConfig:
 
     # Phase 1: data + small L1(|w|) + small imag penalty
     phase1_epochs = 10000
-    l1_reg_coeff_phase1 = 1e-10
-    imag_w_coeff_phase1 = 1e-10
+    l1_reg_coeff_phase1 = 1e-3
+    imag_w_coeff_phase1 = 1e1
     phase1_prune_enabled = True
-    phase1_prune_threshold = 1e-3
+    phase1_prune_threshold = 1e-1
 
     # Phase 2: higher sparsity + periodic pruning (pruning logic stays in utils.train)
-    phase2_epochs = 10000
+    phase2_epochs = 20000
     l1_reg_coeff_phase2 = 1e-3
-    imag_w_coeff_phase2 = 1e-10
+    imag_w_coeff_phase2 = 1e1
 
     pruning_fraction_phase2 = 0.3
-    pruning_threshold_min = 1e-3
-    pruning_threshold_max = 100.0
+    pruning_threshold_min = 1e-1
+    pruning_threshold_max = 0.1
     pruning_min_edges_per_layer = 10
     phase2_prune_warmup_epochs = 0
-    prune_every_epochs = 1000
+    prune_every_epochs = 5000
 
     normalize_divisions_during_phase2 = True
 
@@ -120,19 +121,28 @@ class CEQLModelTrainingConfig:
     imag_w_coeff_phase3 = 1e-3
 
 
+@dataclass
 class CEQLConfig:
     device = CEQLModelTrainingConfig.device
 
     no_params_list = [
         [
-            {"op": "const", "type": "unary"},
-            {"op": "square","type": "unary"},
-            {"op": "mul",   "type": "binary"},
+            {"op": "const",  "type": "unary"},
+            {"op": "const",  "type": "unary"},
+            {"op": "square", "type": "unary"},
+            {"op": "square", "type": "unary"},
+            {"op": "mul",    "type": "binary"},
+            {"op": "mul",    "type": "binary"},
         ],
         [
-            {"op": "const", "type": "unary"},
-            {"op": "square","type": "unary"},
-            {"op": "mul",   "type": "binary"},
+            {"op": "id", "type": "unary"},
+            {"op": "id", "type": "unary"},
+            {"op": "const",  "type": "unary"},
+            {"op": "const",  "type": "unary"},
+            {"op": "square", "type": "unary"},
+            {"op": "square", "type": "unary"},
+            {"op": "mul",    "type": "binary"},
+            {"op": "mul",    "type": "binary"},
         ],
     ]
 
