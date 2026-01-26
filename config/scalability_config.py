@@ -35,7 +35,7 @@ class OperonConfig:
     sym_decimals: int = 15
 
     # Reporting
-    report_csv_path: str = "reports/ceql_scalability.csv"
+    report_csv_path: str = "reports/operon_scalability.csv"
 
     # Plotting
     y_log_scale: bool = True
@@ -71,6 +71,7 @@ class CEQLModelTrainingConfig:
     device = "mps"
     loss_function = "MSELoss"
     train_batch_size = 2**14
+    report_csv_path: str = "reports/ceql_scalability.csv"
 
     lr = 1e-3
     scheduler = "ReduceLROnPlateau"
