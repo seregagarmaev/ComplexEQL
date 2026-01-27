@@ -68,14 +68,14 @@ class OperonConfig:
 
 @dataclass
 class CEQLModelTrainingConfig:
-    device = "mps"
+    device = "cpu"
     loss_function = "MSELoss"
     train_batch_size = 2**14
     report_csv_path: str = "reports/ceql_scalability.csv"
 
     lr = 1e-3
     scheduler = "ReduceLROnPlateau"
-    schedulerparams = dict(mode="min", patience=1000, factor=0.1, min_lr=1e-6)
+    schedulerparams = dict(mode="min", patience=2000, factor=0.1, min_lr=1e-6)
 
     print_every = 100
 
@@ -96,14 +96,14 @@ class CEQLModelTrainingConfig:
     # =========================================================
 
     # Phase 1: data + small L1(|w|) + small imag penalty
-    phase1_epochs = 10000
+    phase1_epochs = 20000
     l1_reg_coeff_phase1 = 1e-3
     imag_w_coeff_phase1 = 1e1
     phase1_prune_enabled = True
     phase1_prune_threshold = 1e-1
 
     # Phase 2: higher sparsity + periodic pruning (pruning logic stays in utils.train)
-    phase2_epochs = 20000
+    phase2_epochs = 30000
     l1_reg_coeff_phase2 = 1e-3
     imag_w_coeff_phase2 = 1e1
 
@@ -117,7 +117,7 @@ class CEQLModelTrainingConfig:
     normalize_divisions_during_phase2 = True
 
     # Phase 3: sparsity OFF, imag penalty bigger, data fit
-    phase3_epochs = 10000
+    phase3_epochs = 20000
     l1_reg_coeff_phase3 = 1e-7 #0.0
     imag_w_coeff_phase3 = 1e-3
 
