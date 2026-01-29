@@ -33,13 +33,13 @@ class OperonConfig:
 
     allowed_symbols: str = "add,sub,mul,square,constant,variable"
 
-    generations: int = 1000
-    population_size: int = 10000
+    generations: int = 10000
+    population_size: int = 1000
     max_length: int = 50
     max_depth: int = 10
 
-    objectives: tuple[str, ...] = ("mse",)
-    model_selection_criterion: str = "mean_squared_error"
+    objectives: tuple[str, ...] = ("r2", "length")
+    model_selection_criterion: str = "minimum_description_length"
 
     print_best_expression: bool = True
     n_threads = 5
