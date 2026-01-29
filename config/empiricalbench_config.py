@@ -52,22 +52,22 @@ class CEQLModelTrainingConfig:
     use_op_params = False
     op_param_schedules = {}
 
-    phase1_epochs = 10000
+    phase1_epochs = 20000
     l1_reg_coeff_phase1 = 1e-10
     imag_w_coeff_phase1 = 1e-10
     phase1_prune_enabled = True
     phase1_prune_threshold = 1e-3
 
-    phase2_epochs = 20000
+    phase2_epochs = 100000
     l1_reg_coeff_phase2 = 1e-3
     imag_w_coeff_phase2 = 1e-10
 
-    pruning_fraction_phase2 = 0.3
-    pruning_threshold_min = 1e-3
+    pruning_fraction_phase2 = 0.2
+    pruning_threshold_min = 1e-10
     pruning_threshold_max = 100.0
-    pruning_min_edges_per_layer = 10
+    pruning_min_edges_per_layer = 5
     phase2_prune_warmup_epochs = 0
-    prune_every_epochs = 20000
+    prune_every_epochs = 10000
 
     normalize_divisions_during_phase2 = True
 
@@ -81,16 +81,25 @@ class CEQLConfig:
 
     no_params_list = [
         [
+            {"op": "square","type": "unary"},
+            {"op": "square","type": "unary"},
+            {"op": "div",   "type": "binary"},
+        ],
+        [
             {"op": "id",    "type": "unary"},
             {"op": "const", "type": "unary"},
-            {"op": "const", "type": "unary"},
-            {"op": "const", "type": "unary"},
             {"op": "square","type": "unary"},
-            {"op": "sqrt",  "type": "unary"},
+            {"op": "square","type": "unary"},
             {"op": "exp",   "type": "unary"},
-            {"op": "log",   "type": "unary"},
+            {"op": "mul",   "type": "binary"},
+            {"op": "x^y",   "type": "binary"},
+        ],
+        [
+            {"op": "const", "type": "unary"},
+            {"op": "log10",   "type": "unary"},
             {"op": "mul",   "type": "binary"},
             {"op": "div",   "type": "binary"},
+            {"op": "x^y",   "type": "binary"},
         ],
     ]
 
@@ -106,8 +115,10 @@ class CEQLConfig:
         "sqrt":   lambda x: sp.sqrt(x),
         "exp":    lambda x: sp.exp(x),
         "log":    lambda x: sp.log(x + 1.0),
+        "log10":  lambda x: sp.log(x + 1.0, 10),
         "mul":    lambda a, b: a * b,
         "div":    lambda a, b: a / b,
+        "x^y":    lambda a, b: a ** b,
     }
 
 

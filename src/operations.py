@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, Optional
 import torch
 import torch.nn as nn
@@ -68,6 +69,13 @@ def log_operation(x: torch.Tensor, **_) -> torch.Tensor:
     return y.unsqueeze(-1)
 
 
+def log10_operation(x: torch.Tensor, **_) -> torch.Tensor:
+    z = torch.log(x + 1.0) / math.log(10.0)
+    y_real = z.real
+    y = torch.complex(y_real, y_real.new_zeros(y_real.shape))
+    return y.unsqueeze(-1)
+
+
 def sqrt_operation(x: torch.Tensor, **_) -> torch.Tensor:
     z = torch.sqrt(x)
     y_real = z.real # torch.abs(z)
@@ -97,6 +105,16 @@ def div_operation(x1: torch.Tensor, x2: torch.Tensor, **_) -> torch.Tensor:
     y_real = q.real
     y = torch.complex(y_real, y_real.new_zeros(y_real.shape))
     return y.unsqueeze(-1)
+
+
+def pow_operation(x: torch.Tensor, y: torch.Tensor, **_) -> torch.Tensor:
+    base = x + 1.0
+    log_base = torch.log(base).real
+    expo = y.real * log_base
+    out_real = torch.exp(expo)
+    out = torch.complex(out_real, out_real.new_zeros(out_real.shape))
+    return out.unsqueeze(-1)
+
 
 def resonator_operation(x1: torch.Tensor, x2: torch.Tensor, **_) -> torch.Tensor:
     q = x1.real / (x2 * x2)
@@ -147,12 +165,14 @@ UNARY_OPS = {
     "square": square_operation,
     "sqrt": sqrt_operation,
     "log": log_operation,
+    "log10": log10_operation,
     "exp": exponent_operation,
 }
 
 BINARY_OPS = {
     "mul": multiplication_operation,
     "div": div_operation,
+    "x^y": pow_operation,
     "resonator": resonator_operation,
 }
 
