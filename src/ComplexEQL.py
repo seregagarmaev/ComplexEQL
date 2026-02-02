@@ -87,7 +87,7 @@ class SymbolicLayer(nn.Module):
         self.n_inputs = self.n_unary_ops + 2 * self.n_binary_ops
 
         scale = 0.1 ** (1 - self.layer_number)
-        real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * 0.5 #* scale
+        real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) #* scale
         imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) #* scale
         self.weights = nn.Parameter(torch.complex(real, imag))
         self.mask = nn.Parameter(torch.ones_like(real), requires_grad=False)
@@ -804,6 +804,30 @@ class ComplexEQL(nn.Module):
 
         w = self.assembly_layer.weights.data
         self.assembly_layer.weights.data = torch.complex(w.real, w.imag * coeff)
+
+    @torch.no_grad()
+    def force_real_(self) -> None:
+        for layer in self.symbolic_layers:
+            w = layer.weights.data
+            if torch.is_complex(w):
+                layer.weights.data = torch.complex(w.real, w.imag.zero_())
+
+        wA = self.assembly_layer.weights.data
+        if torch.is_complex(wA):
+            self.assembly_layer.weights.data = torch.complex(wA.real, wA.imag.zero_())
+
+    def freeze_imag_(self) -> None:
+        def _hook_zero_imag(grad: torch.Tensor) -> torch.Tensor:
+            if grad is None:
+                return grad
+            if torch.is_complex(grad):
+                return torch.complex(grad.real, torch.zeros_like(grad.imag))
+            return grad
+
+        for layer in self.symbolic_layers:
+            layer.weights.register_hook(_hook_zero_imag)
+
+        self.assembly_layer.weights.register_hook(_hook_zero_imag)
 
     @torch.no_grad()
     def drop_div_ops_with_pruned_denominator_(self) -> int:

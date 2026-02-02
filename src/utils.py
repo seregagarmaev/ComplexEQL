@@ -214,7 +214,7 @@ def train_one_epoch(
 
         pred = model(X, op_params=op_params_epoch)
 
-        pred_abs_max = float(getattr(cfg, "pred_abs_max", 1e18))
+        pred_abs_max = cfg.pred_abs_max
         valid = finite_mask_pred_and_target(pred, y, pred_abs_max=pred_abs_max)
         n_valid = int(valid.sum().item())
         if n_valid == 0:
@@ -291,6 +291,7 @@ def train(
     cfg,
     device: torch.device | str,
     scheduler=None,
+    on_print: Optional[Callable[[int, torch.nn.Module], None]] = None,
 ):
     device = torch.device(device)
     global_epoch = 0
@@ -343,6 +344,8 @@ def train(
                 f"sparsity_reg={avg_sparse:.4e}, imag_w={avg_imag_w:.4e}, "
                 f"active_edges={active}"
             )
+            if on_print is not None:
+                on_print(global_epoch + 1, model)
 
     thr_min = float(getattr(cfg, "pruning_threshold_min", 0.0))
     thr_max = float(getattr(cfg, "pruning_threshold_max", float("inf")))
@@ -496,7 +499,7 @@ def train(
     phase2_epochs = int(getattr(cfg, "phase2_epochs", 0))
     prune_every = int(getattr(cfg, "prune_every_epochs", 0))
     prune_fraction = float(getattr(cfg, "pruning_fraction_phase2", 0.0))
-    normalize_divs = bool(getattr(cfg, "normalize_divisions_during_phase2", True))
+    normalize_divs = bool(getattr(cfg, "normalize_divisions_phase2", True))
 
     for e in range(phase2_epochs):
         avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, _ = train_one_epoch(
@@ -540,6 +543,13 @@ def train(
     # Phase 3
     # -------------------------
     phase3_epochs = int(getattr(cfg, "phase3_epochs", 0))
+    normalize_divs = bool(getattr(cfg, "normalize_divisions_phase3", True))
+    if bool(getattr(cfg, "phase3_force_real", False)):
+        # normalize first so projection doesn't freeze a bad scaling
+        model.normalize_all_divisions_(eps=float(getattr(cfg, "normalize_divisions_eps", 1e-12)))
+        model.force_real_()
+        model.freeze_imag_()
+        
     for _ in range(phase3_epochs):
         avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, _ = train_one_epoch(
             epoch=global_epoch,
@@ -550,20 +560,20 @@ def train(
             device=device,
             cfg=cfg,
             op_params_override=None,
-            l1_enabled=False,
+            l1_enabled=bool(getattr(cfg, "phase3_l1_enabled", False)),
             l1_use_real_only=cfg.l1_on_real_only,
-            l1_coeff=0.0,
+            l1_coeff=float(getattr(cfg, "l1_reg_coeff_phase3", 0.0)),
             l1_eps=float(getattr(cfg, "l1_eps", 1e-12)),
             imag_weights_penalty_enabled=True,
             imag_weights_penalty_coeff=float(getattr(cfg, "imag_w_coeff_phase3", 0.0)),
             prune_now=False,
             prune_threshold=0.0,
-            normalize_divisions=False,
+            normalize_divisions=normalize_divs,
             normalize_divisions_eps=cfg.normalize_divisions_eps,
             clamp_pred=getattr(cfg, "clamp_pred", True),
             clamp_limit=getattr(cfg, "clamp_limit", 1e15),
-            imag_shrink_enabled=False,
-            imag_shrink_coeff=1.0,
+            imag_shrink_enabled=cfg.phase3_imag_shrink_enabled,
+            imag_shrink_coeff=cfg.phase3_imag_shrink_coeff,
         )
 
         if sch is not None:
