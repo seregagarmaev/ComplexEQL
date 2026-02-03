@@ -49,47 +49,52 @@ class CEQLModelTrainingConfig:
     scheduler = "ReduceLROnPlateau"
     schedulerparams = dict(mode="min", patience=2000, factor=0.1, min_lr=1e-6)
 
+    phase1_epochs = 40000
+    phase2_epochs = 100000
+    phase3_epochs = 20000
     print_every = 1000
 
+    l1_reg_coeff_phase1 = 1e-7
+    l1_reg_coeff_phase2 = 1e-4
+    l1_reg_coeff_phase3 = 1e-7
     l1_on_real_only = False
     l1_eps = 1e-12
+    phase3_l1_enabled = True #False
 
+    phase1_prune_enabled = True
+    phase1_prune_threshold = 1e-2
+    pruning_fraction_phase2 = 0.2
+    pruning_threshold_min = 1e-3
+    pruning_threshold_max = 1e-3
+    pruning_min_edges_per_layer = 20
+    phase2_prune_warmup_epochs = 0
+    prune_every_epochs = 1000
+
+    normalize_divisions_phase2 = True
+    normalize_divisions_phase3 = True
     normalize_divisions_eps = 1e-12
+
+    imag_w_coeff_phase1 = 1e-7
+    imag_w_coeff_phase2 = 1e3
+    imag_w_coeff_phase3 = 0
+
+    phase3_imag_shrink_enabled = False
+    phase3_imag_shrink_coeff = 1.0 # 0.99
+    phase3_force_real = True
+
+    theta_eps = 1e-12
+    theta_coeff_phase1 = 1e1
+    theta_coeff_phase2 = 1e1
+    theta_coeff_phase3 = 1e1
 
     clamp_pred = True
     clamp_limit = 1e10
     pred_abs_max = 1e18
 
+    theta_ops = ("log", "sqrt")
     use_op_params = False
     op_param_schedules = {}
 
-    phase1_epochs = 30000
-    l1_reg_coeff_phase1 = 1e-10
-    imag_w_coeff_phase1 = 1e-10
-    phase1_prune_enabled = True
-    phase1_prune_threshold = 1e-3
-
-    phase2_epochs = 100000
-    l1_reg_coeff_phase2 = 1e-3
-    imag_w_coeff_phase2 = 1e3
-
-    pruning_fraction_phase2 = 0.2
-    pruning_threshold_min = 1e-10
-    pruning_threshold_max = 100.0
-    pruning_min_edges_per_layer = 12
-    phase2_prune_warmup_epochs = 0
-    prune_every_epochs = 10000
-
-    normalize_divisions_phase2 = True
-    normalize_divisions_phase3 = True
-
-    phase3_epochs = 20000
-    phase3_l1_enabled = True #False
-    l1_reg_coeff_phase3 = 1e-7
-    imag_w_coeff_phase3 = 0 # 1e-3
-    phase3_imag_shrink_enabled = False
-    phase3_imag_shrink_coeff = 1.0 # 0.99
-    phase3_force_real = True
 
 
 class CEQLConfig:
@@ -115,11 +120,18 @@ class CEQLConfig:
             {"op": "const", "type": "unary"},
             {"op": "square","type": "unary"},
             {"op": "log",   "type": "unary"},
-            {"op": "sqrt",   "type": "unary"},
+            # {"op": "sqrt",   "type": "unary"},
             {"op": "mul",   "type": "binary"},
             {"op": "div",   "type": "binary"},
             {"op": "div",   "type": "binary"},
         ],
+        # [
+        #     {"op": "const", "type": "unary"},
+        # ],
+        # [
+        #     {"op": "log",   "type": "unary"},
+        #     {"op": "const", "type": "unary"},
+        # ],
     ]
 
     n_input_fields = 2
@@ -131,10 +143,10 @@ class CEQLConfig:
         "const":  lambda x: sp.Integer(1),
         "square": lambda x: x**2,
         "cube":   lambda x: x**3,
-        "sqrt":   lambda x: sp.sqrt(x),
+        "sqrt":   lambda x: sp.sqrt(x + 1.0),
         "exp":    lambda x: sp.exp(x),
-        "log":    lambda x: sp.log(x + 1.0),
-        # "log":    lambda x: sp.log(x),
+        # "log":    lambda x: sp.log(x + 1.0),
+        "log":    lambda x: sp.log(x),
         "log10":  lambda x: sp.log(x + 1.0, 10),
         "mul":    lambda a, b: a * b,
         "div":    lambda a, b: a / b,

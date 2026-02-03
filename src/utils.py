@@ -130,6 +130,28 @@ def imag_w_l2_reg_fast(model: torch.nn.Module) -> torch.Tensor:
     return termA if acc is None else (acc + termA)
 
 
+def theta_angle_penalty_fast(model: torch.nn.Module, *, eps: float = 1e-12) -> torch.Tensor:
+    infos = model.get_angle_penalty_inputs(eps=eps)  # [{"op","theta","r","mask"}, ...]
+    if len(infos) == 0:
+        return next(model.parameters()).new_tensor(0.0)
+
+    acc = None
+    cnt = 0
+
+    for d in infos:
+        theta = d["theta"]
+        mask = d["mask"]
+        if mask.any():
+            term = (theta[mask] * theta[mask]).mean()
+            acc = term if acc is None else (acc + term)
+            cnt += 1
+
+    if cnt == 0:
+        return next(model.parameters()).new_tensor(0.0)
+
+    return acc / float(cnt)
+
+
 def finite_mask_pred_and_target(
     pred: torch.Tensor,
     y: torch.Tensor,
@@ -173,26 +195,23 @@ def train_one_epoch(
     cfg,
     *,
     op_params_override: Optional[OpParams] = None,
-    # L1
     l1_enabled: bool,
     l1_use_real_only: bool,
     l1_coeff: float,
     l1_eps: float,
-    # imag penalty
     imag_weights_penalty_enabled: bool,
     imag_weights_penalty_coeff: float,
-    # pruning (kept for compatibility; will remove later)
     prune_now: bool,
     prune_threshold: float,
-    # division normalization
     normalize_divisions: bool = False,
     normalize_divisions_eps: float = 1e-12,
-    # output clamp
     clamp_pred: bool = True,
     clamp_limit: float = 1e15,
-    # imag shrink
     imag_shrink_enabled: bool = False,
     imag_shrink_coeff: float = 1.0,
+    theta_penalty_enabled: bool,
+    theta_penalty_coeff: float,
+    theta_penalty_eps: float = 1e-12,
 ):
     model.train()
     device = torch.device(device)
@@ -203,8 +222,12 @@ def train_one_epoch(
     total_reg_loss = 0.0
     total_real_reg_loss = 0.0
     total_imag_w_reg_loss = 0.0
+    total_theta_reg_loss = 0.0
     total_loss = 0.0
-    num_samples = 0
+
+    # NEW: counters for valid fraction
+    num_points_total = 0
+    num_points_valid = 0
 
     for _, (X, y) in enumerate(dataloader):
         X = X.to(device, non_blocking=True)
@@ -212,13 +235,19 @@ def train_one_epoch(
 
         optimizer.zero_grad(set_to_none=True)
 
+        model.clear_angle_cache_()
         pred = model(X, op_params=op_params_epoch)
 
         pred_abs_max = cfg.pred_abs_max
         valid = finite_mask_pred_and_target(pred, y, pred_abs_max=pred_abs_max)
+
+        # NEW: count attempted points (same shape as valid)
+        num_points_total += int(valid.numel())
+
         n_valid = int(valid.sum().item())
+        num_points_valid += n_valid
+
         if n_valid == 0:
-            # skip this batch
             continue
 
         data_loss = loss_fn(pred.real[valid], y[valid])
@@ -237,7 +266,12 @@ def train_one_epoch(
         else:
             imag_w_reg = pred.real.new_tensor(0.0)
 
-        reg_loss = real_reg + imag_w_reg
+        if theta_penalty_enabled and theta_penalty_coeff > 0.0:
+            theta_reg = float(theta_penalty_coeff) * theta_angle_penalty_fast(model, eps=float(theta_penalty_eps))
+        else:
+            theta_reg = pred.real.new_tensor(0.0)
+
+        reg_loss = real_reg + imag_w_reg + theta_reg
         loss = data_loss + reg_loss
 
         loss.backward()
@@ -245,11 +279,11 @@ def train_one_epoch(
         optimizer.step()
 
         bs = n_valid
-        num_samples += bs
         total_data_loss += data_loss.item() * bs
         total_reg_loss += reg_loss.item() * bs
         total_real_reg_loss += real_reg.item() * bs
         total_imag_w_reg_loss += imag_w_reg.item() * bs
+        total_theta_reg_loss += theta_reg.item() * bs
         total_loss += loss.item() * bs
 
     if prune_now and prune_threshold > 0.0:
@@ -268,15 +302,21 @@ def train_one_epoch(
     if imag_shrink_enabled and imag_shrink_coeff < 1.0:
         model.shrink_imag_weights_(coeff=imag_shrink_coeff)
 
-    denom = max(1, num_samples)
+    denom = max(1, num_points_valid)  # keep your loss-averaging behavior
+
+    valid_frac = (num_points_valid / max(1, num_points_total))
+
     return (
         total_loss / denom,
         total_data_loss / denom,
         total_reg_loss / denom,
         total_real_reg_loss / denom,
         total_imag_w_reg_loss / denom,
+        total_theta_reg_loss / denom,
         op_params_epoch,
+        valid_frac,
     )
+
 
 
 
@@ -334,7 +374,7 @@ def train(
         data_losses.append(float(avg_data))
         imag_w_losses.append(float(avg_imag_w_reg))
 
-    def _maybe_print(tag: str, avg_total: float, avg_data: float, avg_sparse: float, avg_imag_w: float):
+    def _maybe_print(tag: str, avg_total: float, avg_data: float, avg_sparse: float, avg_imag_w: float, avg_theta: float, valid_frac: float):
         if (global_epoch + 1) % cfg.print_every == 0 or global_epoch == 0:
             lr = opt.param_groups[0]["lr"]
             active = model.count_active_edges()
@@ -342,8 +382,11 @@ def train(
                 f"[{tag} | Epoch {global_epoch+1}] "
                 f"lr={lr:.2e}, total={avg_total:.4e}, data={avg_data:.4e}, "
                 f"sparsity_reg={avg_sparse:.4e}, imag_w={avg_imag_w:.4e}, "
+                f"theta={avg_theta:.4e}, "
+                f"valid={valid_frac:.3f}, "
                 f"active_edges={active}"
             )
+
             if on_print is not None:
                 on_print(global_epoch + 1, model)
 
@@ -403,10 +446,14 @@ def train(
                     f"active {before_asm}->{afterA}"
                 )
 
-        dropped = model.drop_div_ops_with_pruned_denominator_()
-        if dropped > 0:
-            print(f"[DROP_DIV | {tag}] pruned_downstream_edges={dropped}")
-        
+        dropped_div = model.drop_div_ops_with_pruned_denominator_()
+        if dropped_div > 0:
+            print(f"[DROP_DIV | {tag}] pruned_downstream_edges={dropped_div}")
+
+        dropped_log = model.drop_log_ops_with_pruned_input_()
+        if dropped_log > 0:
+            print(f"[DROP_LOG | {tag}] pruned_downstream_edges={dropped_log}")
+
         cleaned = model.cascade_cleanup_disconnected_()
         if cleaned > 0:
             print(f"[CLEAN | {tag}] cleaned_disconnected={cleaned}")
@@ -428,7 +475,7 @@ def train(
     # -------------------------
     phase1_epochs = int(getattr(cfg, "phase1_epochs", 0))
     for _ in range(phase1_epochs):
-        avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, _ = train_one_epoch(
+        avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, avg_theta, _, valid_frac = train_one_epoch(
             epoch=global_epoch,
             dataloader=dataloader,
             model=model,
@@ -451,8 +498,11 @@ def train(
             clamp_limit=getattr(cfg, "clamp_limit", 1e15),
             imag_shrink_enabled=False,
             imag_shrink_coeff=1.0,
+            theta_penalty_enabled=True,
+            theta_penalty_coeff=float(getattr(cfg, "theta_coeff_phase1", 0.0)),
+            theta_penalty_eps=float(getattr(cfg, "theta_eps", 1e-12)),
         )
-        _maybe_print("PHASE1", avg_total, avg_data, avg_sparse, avg_imag_w)
+        _maybe_print("PHASE1", avg_total, avg_data, avg_sparse, avg_imag_w, avg_theta, valid_frac)
         _record(avg_data, avg_imag_w)
         global_epoch += 1
     
@@ -473,9 +523,16 @@ def train(
         # (2) prune by threshold (your SymbolicLayer.prune_by_threshold must include the div-safe coupling)
         pruned = model.prune_by_threshold(phase1_prune_thr)
 
-        dropped = model.drop_div_ops_with_pruned_denominator_()
+        dropped_div = model.drop_div_ops_with_pruned_denominator_()
+        dropped_log = model.drop_log_ops_with_pruned_input_()
         cleaned = model.cascade_cleanup_disconnected_()
 
+        if dropped_div > 0:
+            print(f"[DROP_DIV | {tag}] pruned_downstream_edges={dropped_div}")
+        if dropped_log > 0:
+            print(f"[DROP_LOG | {tag}] pruned_downstream_edges={dropped_log}")
+        if cleaned > 0:
+            print(f"[CLEAN | {tag}] cleaned_disconnected={cleaned}")
 
         # (4) rebuild compact model + rebuild optimizer/scheduler
         before_rebuild = model.count_active_edges()
@@ -502,7 +559,7 @@ def train(
     normalize_divs = bool(getattr(cfg, "normalize_divisions_phase2", True))
 
     for e in range(phase2_epochs):
-        avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, _ = train_one_epoch(
+        avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, avg_theta, _, valid_frac = train_one_epoch(
             epoch=global_epoch,
             dataloader=dataloader,
             model=model,
@@ -525,8 +582,11 @@ def train(
             clamp_limit=getattr(cfg, "clamp_limit", 1e15),
             imag_shrink_enabled=False,
             imag_shrink_coeff=1.0,
+            theta_penalty_enabled=True,
+            theta_penalty_coeff=float(getattr(cfg, "theta_coeff_phase2", 0.0)),
+            theta_penalty_eps=float(getattr(cfg, "theta_eps", 1e-12)),
         )
-        _maybe_print("PHASE2", avg_total, avg_data, avg_sparse, avg_imag_w)
+        _maybe_print("PHASE2", avg_total, avg_data, avg_sparse, avg_imag_w, avg_theta, valid_frac)
         _record(avg_data, avg_imag_w)
         global_epoch += 1
 
@@ -551,7 +611,7 @@ def train(
         model.freeze_imag_()
 
     for _ in range(phase3_epochs):
-        avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, _ = train_one_epoch(
+        avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, avg_theta, _, valid_frac = train_one_epoch(
             epoch=global_epoch,
             dataloader=dataloader,
             model=model,
@@ -574,6 +634,9 @@ def train(
             clamp_limit=getattr(cfg, "clamp_limit", 1e15),
             imag_shrink_enabled=cfg.phase3_imag_shrink_enabled,
             imag_shrink_coeff=cfg.phase3_imag_shrink_coeff,
+            theta_penalty_enabled=True,
+            theta_penalty_coeff=float(getattr(cfg, "theta_coeff_phase3", 0.0)),
+            theta_penalty_eps=float(getattr(cfg, "theta_eps", 1e-12)),
         )
 
         if sch is not None:
@@ -582,7 +645,7 @@ def train(
             except TypeError:
                 sch.step()
 
-        _maybe_print("PHASE3", avg_total, avg_data, avg_sparse, avg_imag_w)
+        _maybe_print("PHASE3", avg_total, avg_data, avg_sparse, avg_imag_w, avg_theta, valid_frac)
         _record(avg_data, avg_imag_w)
         global_epoch += 1
 

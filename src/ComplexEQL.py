@@ -88,7 +88,7 @@ class SymbolicLayer(nn.Module):
 
         scale = 0.1 ** (1 - self.layer_number)
         real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) #* scale
-        imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) #* scale
+        imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * 10 #* scale
         self.weights = nn.Parameter(torch.complex(real, imag))
         self.mask = nn.Parameter(torch.ones_like(real), requires_grad=False)
 
@@ -315,7 +315,7 @@ class AssemblyLayer(nn.Module):
         self.cfg = cfg
         in_dim = int(in_dim)
 
-        real = (torch.rand(in_dim, 1) - 0.5) * 0.1
+        real = (torch.rand(in_dim, 1) - 0.5)
         imag = (torch.rand(in_dim, 1) - 0.5) * 0
         self.weights = nn.Parameter(torch.complex(real, imag))
         self.mask = nn.Parameter(torch.ones_like(real), requires_grad=False)
@@ -383,6 +383,66 @@ class ComplexEQL(nn.Module):
         self.symbolic_layers = nn.ModuleList(layers)
         last_outputs = self.symbolic_layers[-1].n_ops
         self.assembly_layer = AssemblyLayer(cfg, int(cfg.n_input_fields) + int(last_outputs))
+
+        self._angle_hook_handles: list[Any] = []
+        self._angle_last_inputs: list[tuple[str, torch.Tensor]] = []
+        self._install_angle_input_hooks()
+
+    def _install_angle_input_hooks(self) -> None:
+        for h in getattr(self, "_angle_hook_handles", []):
+            try:
+                h.remove()
+            except Exception:
+                pass
+        self._angle_hook_handles = []
+        self._angle_last_inputs = []
+
+        # ops to penalize angle for (shared penalty)
+        ops = getattr(self.cfg, "theta_ops", ("log", "sqrt"))
+        ops = set(ops)
+
+        def _hook(op_name: str):
+            def _inner(module: nn.Module, inputs: tuple[torch.Tensor, ...], output: torch.Tensor) -> None:
+                x = inputs[0]
+                self._angle_last_inputs.append((op_name, x))
+            return _inner
+
+        for layer in self.symbolic_layers:
+            for op in layer.unary_ops:
+                name = getattr(op, "fname", None)
+                if name in ops:
+                    handle = op.register_forward_hook(_hook(name))
+                    self._angle_hook_handles.append(handle)
+
+    def clear_angle_cache_(self) -> None:
+        self._angle_last_inputs.clear()
+
+    def get_angle_penalty_inputs(
+        self,
+        *,
+        detach: bool = False,
+        eps: float = 0.0,
+    ) -> list[dict[str, torch.Tensor]]:
+        outs: list[dict[str, torch.Tensor]] = []
+
+        for op_name, x in self._angle_last_inputs:
+            z = x if torch.is_complex(x) else torch.complex(x, x.new_zeros(x.shape))
+
+            theta = torch.atan2(z.imag, z.real)
+            r = z.abs()
+
+            mask = torch.isfinite(theta) & torch.isfinite(r)
+            if eps > 0.0:
+                mask = mask & (r > eps)
+
+            if detach:
+                theta = theta.detach()
+                r = r.detach()
+                mask = mask.detach()
+
+            outs.append({"op": op_name, "theta": theta, "r": r, "mask": mask})
+
+        return outs
 
     def get_symbolic_expression(
         self,
@@ -744,6 +804,10 @@ class ComplexEQL(nn.Module):
         new_model.assembly_layer.weights.data.copy_(wA_new)
         new_model.assembly_layer.mask.data.copy_(mA_new)
 
+        new_model._angle_hook_handles = []
+        new_model._angle_last_inputs = []
+        new_model._install_angle_input_hooks()
+
         return new_model
 
     @torch.no_grad()
@@ -893,7 +957,62 @@ class ComplexEQL(nn.Module):
 
         return pruned_downstream
 
+    @torch.no_grad()
+    def drop_log_ops_with_pruned_input_(self) -> int:
+        """
+        If a log unary op has its input mixing column fully pruned (mask all zeros),
+        then remove that op from the graph by pruning downstream connections to its output.
+        Returns number of downstream edges pruned.
+        """
+        n0 = int(self.cfg.n_input_fields)
+        L = len(self.symbolic_layers)
+        pruned_downstream = 0
+
+        for li, layer in enumerate(self.symbolic_layers):
+            for k, op in enumerate(layer.unary_ops):
+                if getattr(op, "fname", None) != "log":
+                    continue
+
+                col = k  # unary mixing column
+                col_active = (layer.mask[:, col] > 0.5)
+                if bool(col_active.any().item()):
+                    continue  # log still has some incoming edges
+
+                # Ensure log op is killed locally (harmless if already zero)
+                layer.mask[:, col] = 0.0
+                layer.weights[:, col] = torch.complex(
+                    torch.zeros_like(layer.weights.real[:, col]),
+                    torch.zeros_like(layer.weights.imag[:, col]),
+                )
+
+                out_idx = k  # unary outputs occupy [0..n_unary_ops-1]
+
+                # Prune downstream consumers of this output:
+                row = n0 + out_idx
+                if li < (L - 1):
+                    nxt = self.symbolic_layers[li + 1]
+                    active_row = (nxt.mask[row, :] > 0.5)
+                    if active_row.any():
+                        pruned_downstream += int(active_row.sum().item())
+                        nxt.mask[row, active_row] = 0.0
+                        nxt.weights[row, active_row] = torch.complex(
+                            torch.zeros_like(nxt.weights.real[row, active_row]),
+                            torch.zeros_like(nxt.weights.imag[row, active_row]),
+                        )
+                else:
+                    # last symbolic layer -> assembly consumes [x0, h_last]
+                    if bool((self.assembly_layer.mask[row, 0] > 0.5).item()):
+                        pruned_downstream += 1
+                        self.assembly_layer.mask[row, 0] = 0.0
+                        self.assembly_layer.weights[row, 0] = torch.complex(
+                            self.assembly_layer.weights.real[row, 0].new_zeros(()),
+                            self.assembly_layer.weights.imag[row, 0].new_zeros(()),
+                        )
+
+        return pruned_downstream
+    
     def forward(self, x: torch.Tensor, *, op_params: Optional[OpParams] = None) -> torch.Tensor:
+        self.clear_angle_cache_()
         x0 = x
         h = self.symbolic_layers[0](x0, op_params=op_params)
 

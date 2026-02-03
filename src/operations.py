@@ -63,9 +63,8 @@ def square_operation(x: torch.Tensor, **_) -> torch.Tensor:
 
 
 def log_operation(x: torch.Tensor, **_) -> torch.Tensor:
-    z = torch.log(x + 1.0)
-    # z = torch.log(x)
-    y_real = z.real #torch.abs(z)
+    z = torch.log(x)
+    y_real = z.real
     y = torch.complex(y_real, y_real.new_zeros(y_real.shape))
     return y.unsqueeze(-1)
 
@@ -78,7 +77,7 @@ def log10_operation(x: torch.Tensor, **_) -> torch.Tensor:
 
 
 def sqrt_operation(x: torch.Tensor, **_) -> torch.Tensor:
-    z = torch.sqrt(x)
+    z = torch.sqrt(x + 1.0)
     y_real = z.real # torch.abs(z)
     y = torch.complex(y_real, y_real.new_zeros(y_real.shape))
     return y.unsqueeze(-1)
