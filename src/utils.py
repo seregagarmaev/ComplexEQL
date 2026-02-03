@@ -549,7 +549,7 @@ def train(
         model.normalize_all_divisions_(eps=float(getattr(cfg, "normalize_divisions_eps", 1e-12)))
         model.force_real_()
         model.freeze_imag_()
-        
+
     for _ in range(phase3_epochs):
         avg_total, avg_data, _avg_reg, avg_sparse, avg_imag_w, _ = train_one_epoch(
             epoch=global_epoch,
@@ -586,4 +586,10 @@ def train(
         _record(avg_data, avg_imag_w)
         global_epoch += 1
 
+    if bool(getattr(cfg, "phase3_force_real", False)):
+        # normalize first so projection doesn't freeze a bad scaling
+        model.normalize_all_divisions_(eps=float(getattr(cfg, "normalize_divisions_eps", 1e-12)))
+        model.force_real_()
+        model.freeze_imag_()
+        
     return model, (imag_w_losses, data_losses)
