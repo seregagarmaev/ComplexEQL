@@ -130,24 +130,43 @@ def imag_w_l2_reg_fast(model: torch.nn.Module) -> torch.Tensor:
     return termA if acc is None else (acc + termA)
 
 
-def theta_angle_penalty_fast(model: torch.nn.Module, *, eps: float = 1e-12) -> torch.Tensor:
-    infos = model.get_angle_penalty_inputs(eps=eps)  # [{"op","theta","r","mask"}, ...]
+def nonneg_real_input_penalty_fast(
+    model: torch.nn.Module,
+    *,
+    eps: float = 0.0,
+    squared: bool = True,
+) -> torch.Tensor:
+    infos = model.get_unary_penalty_inputs(detach=False)  # or get_angle_penalty_inputs if you didn't rename
     if len(infos) == 0:
-        return next(model.parameters()).new_tensor(0.0)
+        p = next(model.parameters())
+        base = p.real if torch.is_complex(p) else p
+        return base.new_tensor(0.0)
 
     acc = None
     cnt = 0
 
     for d in infos:
-        theta = d["theta"]
-        mask = d["mask"]
-        if mask.any():
-            term = (theta[mask] * theta[mask]).mean()
-            acc = term if acc is None else (acc + term)
-            cnt += 1
+        z = d["z"]  # complex
+        r = z.real  # real part
+        mask = torch.isfinite(r)
+        if eps > 0.0:
+            # optional margin: allow small negatives within [-eps, 0]
+            mask = mask & (r < 1e30)  # no-op but keeps pattern similar
+
+        if not mask.any():
+            continue
+
+        # penalty only when r < 0
+        neg = torch.relu(-r[mask])  # = max(0, -Re(z))
+        term = (neg * neg).mean() if squared else neg.mean()
+
+        acc = term if acc is None else (acc + term)
+        cnt += 1
 
     if cnt == 0:
-        return next(model.parameters()).new_tensor(0.0)
+        p = next(model.parameters())
+        base = p.real if torch.is_complex(p) else p
+        return base.new_tensor(0.0)
 
     return acc / float(cnt)
 
@@ -235,7 +254,7 @@ def train_one_epoch(
 
         optimizer.zero_grad(set_to_none=True)
 
-        model.clear_angle_cache_()
+        model.clear_unary_input_cache_()
         pred = model(X, op_params=op_params_epoch)
 
         pred_abs_max = cfg.pred_abs_max
@@ -267,7 +286,11 @@ def train_one_epoch(
             imag_w_reg = pred.real.new_tensor(0.0)
 
         if theta_penalty_enabled and theta_penalty_coeff > 0.0:
-            theta_reg = float(theta_penalty_coeff) * theta_angle_penalty_fast(model, eps=float(theta_penalty_eps))
+            theta_reg = float(theta_penalty_coeff) * nonneg_real_input_penalty_fast(
+                model,
+                eps=0.0,          # or cfg.nonneg_real_eps if you add it
+                squared=True,     # or cfg.nonneg_real_squared
+            )
         else:
             theta_reg = pred.real.new_tensor(0.0)
 
@@ -347,19 +370,16 @@ def train(
             return torch.optim.Adam(
                 new_model.parameters(),
                 lr=old_opt.param_groups[0]["lr"],
-                betas=old_opt.param_groups[0].get("betas", (0.9, 0.999)),
-                eps=old_opt.param_groups[0].get("eps", 1e-8),
-                weight_decay=old_opt.param_groups[0].get("weight_decay", 0.0),
-                amsgrad=old_opt.param_groups[0].get("amsgrad", False),
             )
         if isinstance(old_opt, torch.optim.AdamW):
             return torch.optim.AdamW(
                 new_model.parameters(),
                 lr=old_opt.param_groups[0]["lr"],
-                betas=old_opt.param_groups[0].get("betas", (0.9, 0.999)),
-                eps=old_opt.param_groups[0].get("eps", 1e-8),
-                weight_decay=old_opt.param_groups[0].get("weight_decay", 0.01),
-                amsgrad=old_opt.param_groups[0].get("amsgrad", False),
+            )
+        if isinstance(old_opt, torch.optim.RMSprop):
+            return torch.optim.RMSprop(
+                new_model.parameters(),
+                lr=old_opt.param_groups[0]["lr"],
             )
         raise ValueError(f"Unsupported optimizer type for rebuild: {type(old_opt)}")
 
@@ -496,8 +516,8 @@ def train(
             normalize_divisions_eps=cfg.normalize_divisions_eps,
             clamp_pred=getattr(cfg, "clamp_pred", False),
             clamp_limit=getattr(cfg, "clamp_limit", 1e15),
-            imag_shrink_enabled=False,
-            imag_shrink_coeff=1.0,
+            imag_shrink_enabled=cfg.phase1_imag_shrink_enabled,
+            imag_shrink_coeff=cfg.phase1_imag_shrink_coeff,
             theta_penalty_enabled=True,
             theta_penalty_coeff=float(getattr(cfg, "theta_coeff_phase1", 0.0)),
             theta_penalty_eps=float(getattr(cfg, "theta_eps", 1e-12)),
@@ -580,8 +600,8 @@ def train(
             normalize_divisions_eps=cfg.normalize_divisions_eps,
             clamp_pred=getattr(cfg, "clamp_pred", True),
             clamp_limit=getattr(cfg, "clamp_limit", 1e15),
-            imag_shrink_enabled=False,
-            imag_shrink_coeff=1.0,
+            imag_shrink_enabled=cfg.phase2_imag_shrink_enabled,
+            imag_shrink_coeff=cfg.phase2_imag_shrink_coeff,
             theta_penalty_enabled=True,
             theta_penalty_coeff=float(getattr(cfg, "theta_coeff_phase2", 0.0)),
             theta_penalty_eps=float(getattr(cfg, "theta_eps", 1e-12)),

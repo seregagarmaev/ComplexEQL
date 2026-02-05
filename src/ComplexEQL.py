@@ -89,6 +89,7 @@ class SymbolicLayer(nn.Module):
         scale = 0.1 ** (1 - self.layer_number)
         real = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) #* scale
         imag = (torch.rand(self.n_input_fields, self.n_inputs) - 0.5) * 10 #* scale
+        # imag = torch.ones(self.n_input_fields, self.n_inputs)
         self.weights = nn.Parameter(torch.complex(real, imag))
         self.mask = nn.Parameter(torch.ones_like(real), requires_grad=False)
 
@@ -414,34 +415,20 @@ class ComplexEQL(nn.Module):
                     handle = op.register_forward_hook(_hook(name))
                     self._angle_hook_handles.append(handle)
 
-    def clear_angle_cache_(self) -> None:
+    def clear_unary_input_cache_(self) -> None:
         self._angle_last_inputs.clear()
 
-    def get_angle_penalty_inputs(
+    def get_unary_penalty_inputs(
         self,
         *,
         detach: bool = False,
-        eps: float = 0.0,
     ) -> list[dict[str, torch.Tensor]]:
         outs: list[dict[str, torch.Tensor]] = []
-
         for op_name, x in self._angle_last_inputs:
             z = x if torch.is_complex(x) else torch.complex(x, x.new_zeros(x.shape))
-
-            theta = torch.atan2(z.imag, z.real)
-            r = z.abs()
-
-            mask = torch.isfinite(theta) & torch.isfinite(r)
-            if eps > 0.0:
-                mask = mask & (r > eps)
-
             if detach:
-                theta = theta.detach()
-                r = r.detach()
-                mask = mask.detach()
-
-            outs.append({"op": op_name, "theta": theta, "r": r, "mask": mask})
-
+                z = z.detach()
+            outs.append({"op": op_name, "z": z})
         return outs
 
     def get_symbolic_expression(
@@ -1012,7 +999,7 @@ class ComplexEQL(nn.Module):
         return pruned_downstream
     
     def forward(self, x: torch.Tensor, *, op_params: Optional[OpParams] = None) -> torch.Tensor:
-        self.clear_angle_cache_()
+        self.clear_unary_input_cache_()
         x0 = x
         h = self.symbolic_layers[0](x0, op_params=op_params)
 

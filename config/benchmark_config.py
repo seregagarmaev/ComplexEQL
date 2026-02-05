@@ -8,7 +8,7 @@ import sympy as sp
 class DataCFG:
     seed: int = 0
 
-    n_train: int = 1024  # 4096
+    n_train: int = 1024 # 4096
     n_test_interp: int = 8192
     n_test_extrap: int = 8192
 
@@ -43,53 +43,58 @@ class CEQLModelTrainingConfig:
     results_path = "reports/sr_benchmark_ceql.csv"
     device = "cpu"
     loss_function = "L1Loss" # "MSELoss"
-    train_batch_size = 1024 #2**14
+    train_batch_size = 2**14
 
     lr = 1e-3
     scheduler = "ReduceLROnPlateau"
-    schedulerparams = dict(mode="min", patience=2000, factor=0.1, min_lr=1e-6)
+    schedulerparams = dict(mode="min", patience=2000, factor=0.1, min_lr=1e-5)
 
-    phase1_epochs = 40000
+    phase1_epochs = 50000
     phase2_epochs = 100000
-    phase3_epochs = 20000
+    phase3_epochs = 30000
     print_every = 1000
 
-    l1_reg_coeff_phase1 = 1e-7
-    l1_reg_coeff_phase2 = 1e-4
-    l1_reg_coeff_phase3 = 1e-7
+    l1_reg_coeff_phase1 = 1e-10
+    l1_reg_coeff_phase2 = 1e-5
+    l1_reg_coeff_phase3 = 0 #1e-10
     l1_on_real_only = False
     l1_eps = 1e-12
     phase3_l1_enabled = True #False
 
     phase1_prune_enabled = True
-    phase1_prune_threshold = 1e-2
+    phase1_prune_threshold = 1e-3
     pruning_fraction_phase2 = 0.2
-    pruning_threshold_min = 1e-3
-    pruning_threshold_max = 1e-3
-    pruning_min_edges_per_layer = 20
+    pruning_threshold_min = 0 #1e-3
+    pruning_threshold_max = 1e-2
+    pruning_min_edges_per_layer = 5
     phase2_prune_warmup_epochs = 0
-    prune_every_epochs = 1000
+    prune_every_epochs = 5000
 
-    normalize_divisions_phase2 = True
-    normalize_divisions_phase3 = True
+    normalize_divisions_phase2 = True #False
+    normalize_divisions_phase3 = False
     normalize_divisions_eps = 1e-12
 
-    imag_w_coeff_phase1 = 1e-7
-    imag_w_coeff_phase2 = 1e3
-    imag_w_coeff_phase3 = 0
+    imag_w_coeff_phase1 = 1e-10
+    imag_w_coeff_phase2 = 1e-5
+    imag_w_coeff_phase3 = 1e-3
 
+    phase1_imag_shrink_enabled = False
+    phase2_imag_shrink_enabled = False #True
     phase3_imag_shrink_enabled = False
-    phase3_imag_shrink_coeff = 1.0 # 0.99
-    phase3_force_real = True
+    
+    phase1_imag_shrink_coeff = 1.0
+    phase2_imag_shrink_coeff = 1.0
+    phase3_imag_shrink_coeff = 0.99
+    phase3_force_real = False # True
 
     theta_eps = 1e-12
-    theta_coeff_phase1 = 1e1
-    theta_coeff_phase2 = 1e1
-    theta_coeff_phase3 = 1e1
+    theta_coeff_phase1 = 1e-10
+    theta_coeff_phase2 = 1e-3
+    theta_coeff_phase3 = 1e-3
 
     clamp_pred = True
     clamp_limit = 1e10
-    pred_abs_max = 1e18
+    pred_abs_max = 1e20
 
     theta_ops = ("log", "sqrt")
     use_op_params = False
@@ -104,6 +109,7 @@ class CEQLConfig:
         [
             # {"op": "id",    "type": "unary"},
             {"op": "const", "type": "unary"},
+            {"op": "const", "type": "unary"},
             {"op": "square","type": "unary"},
             {"op": "square","type": "unary"},
             # {"op": "log",   "type": "unary"},
@@ -115,23 +121,16 @@ class CEQLConfig:
             # {"op": "x^y",   "type": "binary"},
         ],
         [
-            # {"op": "id",    "type": "unary"},
-            # {"op": "id",    "type": "unary"},
-            {"op": "const", "type": "unary"},
-            {"op": "square","type": "unary"},
+            {"op": "id",    "type": "unary"},
+            # {"op": "const", "type": "unary"},
+            # {"op": "square","type": "unary"},
             {"op": "log",   "type": "unary"},
-            # {"op": "sqrt",   "type": "unary"},
-            {"op": "mul",   "type": "binary"},
-            {"op": "div",   "type": "binary"},
+            {"op": "log",   "type": "unary"},
+            {"op": "sqrt",   "type": "unary"},
+            {"op": "sqrt",   "type": "unary"},
+            # {"op": "mul",   "type": "binary"},
             {"op": "div",   "type": "binary"},
         ],
-        # [
-        #     {"op": "const", "type": "unary"},
-        # ],
-        # [
-        #     {"op": "log",   "type": "unary"},
-        #     {"op": "const", "type": "unary"},
-        # ],
     ]
 
     n_input_fields = 2
@@ -143,7 +142,7 @@ class CEQLConfig:
         "const":  lambda x: sp.Integer(1),
         "square": lambda x: x**2,
         "cube":   lambda x: x**3,
-        "sqrt":   lambda x: sp.sqrt(x + 1.0),
+        "sqrt":   lambda x: sp.sqrt(x),
         "exp":    lambda x: sp.exp(x),
         # "log":    lambda x: sp.log(x + 1.0),
         "log":    lambda x: sp.log(x),
