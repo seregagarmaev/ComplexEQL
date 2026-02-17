@@ -201,6 +201,304 @@ def finite_mask_pred_and_target(
     return pred_ok & y_ok
 
 
+@torch.no_grad()
+def _apply_prune_mask_entries_(
+    mask: torch.Tensor,
+    weights: torch.Tensor,
+    idx_flat: torch.Tensor,
+) -> None:
+    # idx_flat: indices into mask.view(-1) / weights.view(-1)
+    m = mask.view(-1)
+    w = weights.view(-1)
+    m[idx_flat] = 0.0
+    # zero complex entries fully
+    if torch.is_complex(w):
+        w[idx_flat] = torch.complex(w.real[idx_flat].new_zeros(idx_flat.shape), w.real[idx_flat].new_zeros(idx_flat.shape))
+    else:
+        w[idx_flat] = w[idx_flat].new_zeros(idx_flat.shape)
+
+
+def importance_prune_on_batch(
+    *,
+    model: torch.nn.Module,
+    X: torch.Tensor,
+    y: torch.Tensor,
+    loss_fn,
+    cfg,
+    frac: float,
+    device: torch.device | str,
+    op_params=None,
+    pred_abs_max: float | None = None,
+    min_edges_total: int = 0,
+) -> int:
+    """
+    Prune `frac` of currently-active edges with smallest Taylor importance |w*g|.
+    Uses ONLY batch data loss (pred.real vs y) for importance.
+    Returns number of edges pruned (mask entries zeroed).
+    """
+    device = torch.device(device)
+    frac = float(frac)
+    if frac <= 0.0:
+        return 0
+
+    model.train()  # important: grads through same graph as training
+    model.zero_grad(set_to_none=True)
+
+    X = X.to(device)
+    y = y.to(device)
+
+    # forward
+    model.clear_unary_input_cache_()
+    pred = model(X, op_params=op_params)
+
+    if pred_abs_max is None:
+        pred_abs_max = float(getattr(cfg, "pred_abs_max", 1e20))
+
+    valid = finite_mask_pred_and_target(pred, y, pred_abs_max=float(pred_abs_max))
+    if int(valid.sum().item()) == 0:
+        return 0
+
+    data_loss = loss_fn(pred.real[valid], y[valid])
+    data_loss.backward()
+
+    # collect active params and scores
+    scores = []
+    refs = []  # (layer_obj, flat_index_tensor)
+    n_active = 0
+
+    def _score_tensor(w: torch.Tensor, g: torch.Tensor) -> torch.Tensor:
+        # scalar per-entry importance; returns real tensor same shape as w
+        if torch.is_complex(w):
+            # s = |Re(w)*Re(g) + Im(w)*Im(g)|
+            return (w.real * g.real + w.imag * g.imag).abs()
+        return (w * g).abs()
+
+    # symbolic layers
+    for layer in model.symbolic_layers:
+        w = layer.weights
+        m = layer.mask
+        g = layer.weights.grad
+        if g is None:
+            continue
+
+        active = (m > 0.5)
+        n_active += int(active.sum().item())
+        if active.any():
+            s = _score_tensor(w, g)
+            # keep only active entries
+            scores.append(s[active].reshape(-1))
+            # store mapping from active entries -> flat indices
+            active_flat_idx = active.view(-1).nonzero(as_tuple=False).reshape(-1)
+            refs.append(("sym", layer, active_flat_idx))
+
+    # assembly
+    wA = model.assembly_layer.weights
+    mA = model.assembly_layer.mask
+    gA = model.assembly_layer.weights.grad
+    if gA is not None:
+        activeA = (mA > 0.5)
+        n_active += int(activeA.sum().item())
+        if activeA.any():
+            sA = _score_tensor(wA, gA)
+            scores.append(sA[activeA].reshape(-1))
+            activeA_flat_idx = activeA.view(-1).nonzero(as_tuple=False).reshape(-1)
+            refs.append(("asm", model.assembly_layer, activeA_flat_idx))
+
+    if n_active <= int(min_edges_total):
+        model.zero_grad(set_to_none=True)
+        return 0
+
+    all_scores = torch.cat(scores, dim=0)
+    n = int(all_scores.numel())
+    k_target = int(np.floor(frac * n))
+    k_cap = n - int(min_edges_total)
+    k = max(0, min(k_target, k_cap))
+    if k <= 0:
+        model.zero_grad(set_to_none=True)
+        return 0
+
+    # pick k smallest scores
+    # (largest=False returns k smallest)
+    kth = torch.topk(all_scores, k, largest=False).indices
+
+    # map global indices back to (module, flat_idx)
+    # build prefix offsets
+    sizes = [0]
+    for s in scores:
+        sizes.append(sizes[-1] + int(s.numel()))
+
+    pruned = 0
+    for t in kth.tolist():
+        # locate which ref bucket
+        bi = 0
+        while not (sizes[bi] <= t < sizes[bi + 1]):
+            bi += 1
+        local = t - sizes[bi]
+
+        kind, obj, active_flat_idx = refs[bi]
+        flat_idx = active_flat_idx[local].view(1)
+
+        if kind == "sym":
+            _apply_prune_mask_entries_(obj.mask.data, obj.weights.data, flat_idx)
+        else:
+            _apply_prune_mask_entries_(obj.mask.data, obj.weights.data, flat_idx)
+
+        pruned += 1
+
+    # cleanup numerics
+    model.sanitize_weights(clamp_value=float(getattr(cfg, "clamp_limit", 1e15)))
+
+    model.zero_grad(set_to_none=True)
+    return pruned
+
+@torch.no_grad()
+def ablation_prune_on_batch(
+    *,
+    model: torch.nn.Module,
+    X: torch.Tensor,
+    y: torch.Tensor,
+    loss_fn,
+    cfg,
+    frac: float,
+    device: torch.device | str,
+    op_params=None,
+    pred_abs_max: float | None = None,
+    min_edges_total: int = 0,
+    use_baseline_valid_mask: bool = True,
+    print_stats: bool = False,
+) -> int:
+    """
+    True ablation pruning:
+    for each active edge, set it to zero, recompute batch loss, measure Δ = L_i - L0.
+    Prune frac of edges with smallest Δ (least harmful or helpful).
+
+    Returns number of edges pruned (mask entries zeroed).
+    """
+    device = torch.device(device)
+    frac = float(frac)
+    if frac <= 0.0:
+        return 0
+
+    model.eval()
+
+    X = X.to(device)
+    y = y.to(device)
+
+    if pred_abs_max is None:
+        pred_abs_max = float(getattr(cfg, "pred_abs_max", 1e20))
+
+    # ---- baseline ----
+    model.clear_unary_input_cache_()
+    pred0 = model(X, op_params=op_params)
+    valid0 = finite_mask_pred_and_target(pred0, y, pred_abs_max=float(pred_abs_max))
+    n_valid0 = int(valid0.sum().item())
+    if n_valid0 == 0:
+        return 0
+
+    L0 = loss_fn(pred0.real[valid0], y[valid0]).detach()
+
+    # collect all active entries as (kind, module, flat_idx)
+    entries: list[tuple[str, object, int]] = []
+
+    for layer in model.symbolic_layers:
+        active = (layer.mask > 0.5).view(-1)
+        idxs = active.nonzero(as_tuple=False).view(-1).tolist()
+        for fi in idxs:
+            entries.append(("sym", layer, int(fi)))
+
+    activeA = (model.assembly_layer.mask > 0.5).view(-1)
+    idxsA = activeA.nonzero(as_tuple=False).view(-1).tolist()
+    for fi in idxsA:
+        entries.append(("asm", model.assembly_layer, int(fi)))
+
+    n_active = len(entries)
+    if n_active <= int(min_edges_total):
+        return 0
+
+    k_target = int(np.floor(frac * n_active))
+    k_cap = n_active - int(min_edges_total)
+    k = max(0, min(k_target, k_cap))
+    if k <= 0:
+        return 0
+    if print_stats:
+        print(f"[ABL_STATS] active_before={n_active} will_prune_k={k} keep_after={n_active - k}")
+
+    def _get_views(obj):
+        return obj.mask.view(-1), obj.weights.view(-1)
+
+    deltas = torch.empty(n_active, device=device, dtype=L0.dtype)
+
+    for t, (_kind, obj, flat_idx) in enumerate(entries):
+        m, w = _get_views(obj)
+
+        w_old = w[flat_idx].clone()
+        m_old = m[flat_idx].clone()
+
+        # ablate: set weight to zero (mask unchanged)
+        w[flat_idx] = torch.complex(w_old.real.new_zeros(()), w_old.real.new_zeros(()))
+
+        model.clear_unary_input_cache_()
+        pred1 = model(X, op_params=op_params)
+
+        if use_baseline_valid_mask:
+            valid = valid0
+            bad = ~torch.isfinite(pred1.real[valid])
+            if bad.any():
+                delta = torch.tensor(float("inf"), device=device, dtype=L0.dtype)
+            else:
+                L1 = loss_fn(pred1.real[valid], y[valid]).detach()
+                delta = L1 - L0
+        else:
+            valid1 = finite_mask_pred_and_target(pred1, y, pred_abs_max=float(pred_abs_max))
+            if int(valid1.sum().item()) == 0:
+                delta = torch.tensor(float("inf"), device=device, dtype=L0.dtype)
+            else:
+                L1 = loss_fn(pred1.real[valid1], y[valid1]).detach()
+                delta = L1 - L0
+
+        deltas[t] = delta
+
+        # restore
+        w[flat_idx] = w_old
+        m[flat_idx] = m_old
+
+    # prune k smallest deltas
+    idx_prune = torch.topk(deltas, k, largest=False).indices.tolist()
+
+    pruned_deltas = deltas[idx_prune]  # shape (k,)
+    delta_threshold = pruned_deltas.max().item()  # cutoff used
+    delta_min = pruned_deltas.min().item()
+    delta_mean = pruned_deltas.mean().item()
+
+    if print_stats:
+        print(
+            f"[ABL_STATS] L0={float(L0.item()):.6e} "
+            f"k={k}/{n_active} frac={k/n_active:.3f} "
+            f"delta_thr={delta_threshold:.6e} "
+            f"delta_min={delta_min:.6e} delta_mean={delta_mean:.6e}"
+        )
+
+    pruned = 0
+    for t in idx_prune:
+        _, obj, flat_idx = entries[t]
+        m, w = _get_views(obj)
+        if m[flat_idx] > 0.5:
+            m[flat_idx] = 0.0
+            w[flat_idx] = torch.complex(w[flat_idx].real.new_zeros(()), w[flat_idx].real.new_zeros(()))
+            pruned += 1
+
+    model.sanitize_weights(clamp_value=float(getattr(cfg, "clamp_limit", 1e15)))
+
+    if print_stats:
+        active_after = 0
+        for layer in model.symbolic_layers:
+            active_after += int((layer.mask > 0.5).sum().item())
+        active_after += int((model.assembly_layer.mask > 0.5).sum().item())
+        print(f"[ABL_STATS] pruned={pruned} active_after={active_after}")
+
+    return pruned
+
+
 # -------------------------
 # Train one epoch
 # -------------------------
@@ -414,58 +712,37 @@ def train(
     thr_max = float(getattr(cfg, "pruning_threshold_max", float("inf")))
     min_edges_layer = int(getattr(cfg, "pruning_min_edges_per_layer", 0))
 
+    def _get_one_batch():
+        xb, yb = next(iter(dataloader))
+        return xb.to(device), yb.to(device)
+    
+    
     def _do_prune_and_rebuild(tag: str, prune_fraction: float):
         nonlocal model, opt, sch
 
-        before_total = model.count_active_edges()
-        before_sym, before_asm = model.count_active_edges_per_layer()
+        # --- NEW: ablation pruning on one batch ---
+        if bool(getattr(cfg, "ablation_prune_enabled", False)) and prune_fraction > 0.0:
+            xb, yb = _get_one_batch()
+            before_edges = model.count_active_edges()
+            pruned_abl = ablation_prune_on_batch(
+                model=model,
+                X=xb,
+                y=yb,
+                loss_fn=loss_fn,
+                cfg=cfg,
+                frac=float(getattr(cfg, "ablation_prune_fraction_phase2", prune_fraction)),
+                device=device,
+                op_params=None,
+                pred_abs_max=float(getattr(cfg, "pred_abs_max", 1e20)),
+                min_edges_total=int(getattr(cfg, "ablation_min_edges_total", 0)),
+                use_baseline_valid_mask=True,
+                print_stats=True,
+            )
+            if pruned_abl > 0:
+                after_edges = model.count_active_edges()
+                print(f"[ABL_PRUNE | {tag}] pruned={pruned_abl} active {before_edges}->{after_edges}")
 
-        per_sym, asm = model.pruning_thresholds_from_fraction_per_layer(
-            prune_fraction,
-            min_edges_per_layer=min_edges_layer,
-            eps=1e-12,
-        )
-
-        pruned_total = 0
-
-        for li, (thr, k_to_prune, active_now) in enumerate(per_sym):
-            if thr is None or k_to_prune <= 0 or active_now <= min_edges_layer:
-                continue
-
-            thr = float(thr)
-            if thr < thr_min:
-                thr = thr_min
-            if thr > thr_max:
-                thr = thr_max
-
-            pruned_here = model.symbolic_layers[li].prune_by_threshold(thr)
-            pruned_total += pruned_here
-            if pruned_here > 0:
-                after_li = int((model.symbolic_layers[li].mask > 0.5).sum().item())
-                print(
-                    f"[PRUNE_SYM | {tag} | layer={li}] "
-                    f"pruned={pruned_here} (fraction={prune_fraction:g}, thr={thr:g}) "
-                    f"active {before_sym[li]}->{after_li}"
-                )
-
-        thrA, kA, activeA = asm
-        if thrA is not None and kA > 0 and activeA > min_edges_layer:
-            thrA = float(thrA)
-            if thrA < thr_min:
-                thrA = thr_min
-            if thrA > thr_max:
-                thrA = thr_max
-
-            prunedA = model.assembly_layer.prune_by_threshold(thrA)
-            pruned_total += prunedA
-            if prunedA > 0:
-                afterA = int((model.assembly_layer.mask > 0.5).sum().item())
-                print(
-                    f"[PRUNE_ASM | {tag}] "
-                    f"pruned={prunedA} (fraction={prune_fraction:g}, thr={thrA:g}) "
-                    f"active {before_asm}->{afterA}"
-                )
-
+        # keep your existing pipeline:
         dropped_div = model.drop_div_ops_with_pruned_denominator_()
         if dropped_div > 0:
             print(f"[DROP_DIV | {tag}] pruned_downstream_edges={dropped_div}")
@@ -482,13 +759,9 @@ def train(
         model = model.rebuild_from_pruned().to(device)
         opt = _rebuild_optimizer_like(opt, model)
         sch = _rebuild_scheduler_like(sch, opt, cfg)
-
         after_total = model.count_active_edges()
-        if pruned_total > 0:
-            print(f"[PRUNE | {tag}] pruned_total={pruned_total} active {before_total}->{after_total}")
-        else:
-            if after_total != before_rebuild_total:
-                print(f"[REBUILD | {tag}] active {before_rebuild_total}->{after_total}")
+        if after_total != before_rebuild_total:
+            print(f"[REBUILD | {tag}] active {before_rebuild_total}->{after_total}")
 
     # -------------------------
     # Phase 1
