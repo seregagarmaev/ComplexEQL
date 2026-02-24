@@ -45,13 +45,13 @@ class CEQLModelTrainingConfig:
     loss_function = "MSELoss"
     train_batch_size = 2**14
 
-    lr = 1e-3
+    lr = 1e-2
     scheduler = "ReduceLROnPlateau"
     schedulerparams = dict(mode="min", patience=2000, factor=0.1, min_lr=1e-5)
 
-    phase1_epochs = 500000
-    phase2_epochs = 1000000
-    phase3_epochs = 30000
+    phase1_epochs = 100000
+    phase2_epochs = 200000 #100000
+    phase3_epochs = 50000
     print_every = 1000
 
     l1_reg_coeff_phase1 = 1e-10
@@ -74,7 +74,7 @@ class CEQLModelTrainingConfig:
     normalize_divisions_eps = 1e-12
 
     imag_w_coeff_phase1 = 1e-10
-    imag_w_coeff_phase2 = 1e3
+    imag_w_coeff_phase2 = 1e-3
     imag_w_coeff_phase3 = 1e3
 
     phase1_imag_shrink_enabled = False
@@ -84,7 +84,7 @@ class CEQLModelTrainingConfig:
     phase1_imag_shrink_coeff = 1.0
     phase2_imag_shrink_coeff = 1.0
     phase3_imag_shrink_coeff = 0.99
-    phase3_force_real = False # True
+    phase3_force_real = False #True
 
     theta_eps = 1e-12
     theta_coeff_phase1 = 1e-10
@@ -107,8 +107,8 @@ class CEQLModelTrainingConfig:
 
     ablation_prune_enabled: bool = True
     ablation_prune_fraction_phase2: float = 0.1
-    ablation_min_edges_total: int = 10
-    prune_every_epochs = 100000
+    ablation_min_edges_total: int = 15
+    prune_every_epochs = 10000
 
 
 

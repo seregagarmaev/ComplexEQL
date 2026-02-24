@@ -68,6 +68,41 @@ def log_operation(x: torch.Tensor, **_) -> torch.Tensor:
     y = torch.complex(y_real, y_real.new_zeros(y_real.shape))
     return y.unsqueeze(-1)
 
+# def log_operation(x: torch.Tensor, **_) -> torch.Tensor:
+#     alpha = 1.0
+#     sigma = 0.1
+#     p = 1.0
+
+#     xr = x.real
+#     yi = x.imag
+#     ay = yi.abs()
+#     r_tilde = torch.sqrt(xr * xr + (alpha * ay) ** 2)
+#     w = torch.exp(- (ay / sigma) ** p)
+#     y_real = w * torch.log(r_tilde)
+
+#     y = torch.complex(y_real, y_real.new_zeros(y_real.shape))
+#     return y.unsqueeze(-1)
+# def log_operation(x: torch.Tensor, **_) -> torch.Tensor:
+#     sigma = 1.0
+#     p = 1.0
+
+#     xr = x.real
+#     yi = x.imag
+#     ay = yi.abs()
+
+#     w = torch.exp(- (ay / sigma) ** p)
+#     y_real = w * torch.log(xr.abs())
+
+#     off_axis_x0 = (ay > 0) & (xr == 0)
+#     y_real = torch.where(off_axis_x0, torch.zeros_like(y_real), y_real)
+
+#     on_axis = (ay == 0)
+#     y_real = torch.where(on_axis, torch.log(xr.abs()), y_real)
+
+#     y = torch.complex(y_real, y_real.new_zeros(y_real.shape))
+#     return y.unsqueeze(-1)
+
+
 
 def log10_operation(x: torch.Tensor, **_) -> torch.Tensor:
     z = torch.log(x + 1.0) / math.log(10.0)
