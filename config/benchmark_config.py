@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 import sympy as sp
 
@@ -223,7 +223,49 @@ class SINDyConfig:
     coef_zero_tol: float = 1e-12
 
 
+@dataclass(frozen=True)
+class EQLDivConfig:
+    results_path: str = "reports/sr_benchmark_eql_div.csv"
+
+    name: str = "eql_div"
+
+    n_runs: int = 5
+    base_seed: int = 0
+
+    # architecture
+    num_h_layers: int = 2
+    layer_width: int = 10
+    layer_ops: Tuple[str, ...] = ("id", "sin", "cos", "exp", "log", "multiply")
+    out_op: str = "reg_div"
+
+    # training
+    epoch_factor: int = 1000
+    penalty_every: int = 10
+    batch_size: int = 512
+    penalty_examples_cap: int = 2048
+
+    learning_rate: float = 1e-3
+    beta1: float = 0.9
+
+    # sparsity
+    reg_sched: Tuple[float, float] = (0.1, 0.9)
+    reg_scale: float = 1e-2
+    l0_threshold: float = 1e-2
+
+    # division
+    test_div_threshold: float = 1e-2
+    weight_init_param: float = 1.0
+    output_bound: Optional[float] = None
+
+    # symbolic
+    complexity_threshold: float = 1e-3
+    symbolic_prune_threshold: float = 1e-2
+    round_decimals: int = 6
+    simplify: bool = False
+
+
 CEQL_TRAIN = CEQLModelTrainingConfig()
 CEQL = CEQLConfig()
 PYSR = PySRConfig()
 SINDY = SINDyConfig()
+EQLDIV = EQLDivConfig()
