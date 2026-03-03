@@ -192,6 +192,38 @@ class PySRConfig:
     delete_tempfiles: bool = True
 
 
+@dataclass(frozen=True)
+class SINDyConfig:
+    results_path: str = "reports/sr_benchmark_sindy.csv"
+
+    n_runs: int = 5
+    base_seed: int = 0
+
+    # feature library
+    poly_degree: int = 2
+    include_interaction: bool = True
+    include_bias: bool = True
+    max_library_features: int = 100
+
+    unary_ops: List[str] = ("log", "sqrt")
+    binary_ops: List[str] = ("*", "/")
+
+    # sparse regression
+    threshold: float = 1e-2
+    alpha: float = 1e-6
+    max_iter: int = 1000
+    normalize_columns: bool = True
+
+    # numerical stabilizers
+    log_eps: float = 1e-12
+    sqrt_abs: bool = True
+    div_eps: float = 1e-6
+    max_feature_abs: float = 1e6
+
+    coef_zero_tol: float = 1e-12
+
+
 CEQL_TRAIN = CEQLModelTrainingConfig()
 CEQL = CEQLConfig()
 PYSR = PySRConfig()
+SINDY = SINDyConfig()
