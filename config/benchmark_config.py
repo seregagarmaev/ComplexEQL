@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from typing import Optional, List
 
 import sympy as sp
 
@@ -167,5 +168,30 @@ class CEQLConfig:
     }
 
 
+@dataclass(frozen=True)
+class PySRConfig:
+    results_path: str = "reports/sr_benchmark_pysr.csv"
+
+    n_runs: int = 5
+    base_seed: int = 0
+
+    niterations: int = 1000
+    populations: int = 200
+    maxsize: int = 20
+    timeout_in_seconds: Optional[int] = None
+
+    unary_ops: List[str] = ("log", "sqrt", "square")
+    binary_ops: List[str] = ("+", "-", "*", "/")
+
+    elementwise_loss: str = "loss(x, y) = (x - y)^2"
+    model_selection: str = "best"
+
+    verbosity: int = 0
+    progress: bool = False
+    temp_equation_file: bool = True
+    delete_tempfiles: bool = True
+
+
 CEQL_TRAIN = CEQLModelTrainingConfig()
 CEQL = CEQLConfig()
+PYSR = PySRConfig()
