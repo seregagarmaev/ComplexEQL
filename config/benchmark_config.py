@@ -234,14 +234,14 @@ class EQLDivConfig:
 
     # architecture
     num_h_layers: int = 2
-    layer_width: int = 10
-    layer_ops: Tuple[str, ...] = ("id", "sin", "cos", "exp", "log", "multiply")
-    out_op: str = "reg_div"
+    layer_width: int = 5
+    layer_ops: Tuple[str, ...] = ("id", "id", "log", "multiply", "multiply")
+    out_op: str = "id"
 
     # training
     epoch_factor: int = 1000
     penalty_every: int = 10
-    batch_size: int = 512
+    batch_size: int = 128
     penalty_examples_cap: int = 2048
 
     learning_rate: float = 1e-3
