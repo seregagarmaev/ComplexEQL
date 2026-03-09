@@ -152,7 +152,7 @@ def pow_operation(x: torch.Tensor, y: torch.Tensor, **_) -> torch.Tensor:
 
 
 def resonator_operation(x1: torch.Tensor, x2: torch.Tensor, **_) -> torch.Tensor:
-    q = x1.real / (x2 * x2)
+    q = x1.real / (x2.real * x2.real)
     y_real = q.real
     y = torch.complex(y_real, y_real.new_zeros(y_real.shape))
     return y.unsqueeze(-1)
