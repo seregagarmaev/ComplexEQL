@@ -22,18 +22,17 @@ class ResonatorBlock(nn.Module):
 
         self.eql = ComplexEQL(eql_cfg)
 
-        self.c = nn.Parameter(torch.complex(torch.rand(1), torch.rand(1)))
-        self.d = nn.Parameter(torch.complex(torch.rand(1), torch.rand(1)))
-        self.g = nn.Parameter(torch.complex(torch.rand(1), torch.rand(1)))
+        self.A = nn.Parameter(torch.complex(torch.rand(1), torch.rand(1)))
+        self.gamma = nn.Parameter(torch.complex(torch.rand(1), torch.rand(1)))
     
     def forward(self, x: torch.Tensor, *, op_params: Optional[OpParams] = None,) -> torch.Tensor:
-        f = x[:, 0:1]
+        omega = x[:, 0:1]
 
         x_aux = x[:, 1:]
         h = self.eql(x_aux, op_params=op_params)
         
-        num = self.c
-        den = (self.d * f - h) ** 2 + self.g
+        num = self.A
+        den = (omega - h) ** 2 + self.gamma
         return num / den
     
 
@@ -54,8 +53,8 @@ class LinearResonatorWrapper(nn.Module):
         return r.eql.count_active_edges() == 0
 
     def forward(self, x: torch.Tensor, *, op_params: Optional[OpParams] = None) -> torch.Tensor:
-        f = x[:, 0:1].to(self.a.dtype)
-        y = self.a * f + self.b
+        omega = x[:, 0:1].to(self.a.dtype)
+        y = self.a * omega + self.b
 
         for r in self.resonators:
             y = y + r(x, op_params=op_params)
@@ -194,9 +193,8 @@ class LinearResonatorWrapper(nn.Module):
         new_model.b.data.copy_(self.b.data)
 
         for new_r, old_r in zip(new_model.resonators, alive_old_resonators):
-            new_r.c.data.copy_(old_r.c.data)
-            new_r.d.data.copy_(old_r.d.data)
-            new_r.g.data.copy_(old_r.g.data)
+            new_r.A.data.copy_(old_r.A.data)
+            new_r.gamma.data.copy_(old_r.gamma.data)
             new_r.eql = old_r.eql.rebuild_from_pruned().to(self.a.device)
 
         return new_model
@@ -208,7 +206,7 @@ class LinearResonatorWrapper(nn.Module):
         *,
         use_imag: bool = False,
     ) -> sp.Expr:
-        f = symbolic_inputs[0]
+        omega = symbolic_inputs[0]
         aux_inputs = symbolic_inputs[1:]
 
         def _coef(w: torch.Tensor) -> sp.Expr:
@@ -218,7 +216,7 @@ class LinearResonatorWrapper(nn.Module):
             wi = sp.Float(float(w.imag.detach().cpu().item()))
             return wr + sp.I * wi
 
-        expr: sp.Expr = _coef(self.a) * f + _coef(self.b)
+        expr: sp.Expr = _coef(self.a) * omega + _coef(self.b)
 
         for block in self.resonators:
             h = block.eql.get_symbolic_expression(
@@ -227,11 +225,10 @@ class LinearResonatorWrapper(nn.Module):
                 use_imag=use_imag,
             )
 
-            c = _coef(block.c)
-            d = _coef(block.d)
-            g = _coef(block.g)
+            A = _coef(block.A)
+            gamma = _coef(block.gamma)
 
-            expr = expr + c / ((d * f - h) ** 2 + g)
+            expr = expr + A / ((omega - h) ** 2 + gamma)
 
         expr = _sanitize_symbolic(expr)
         return prune_small_coeff_terms(expr, rounding_decimals)
