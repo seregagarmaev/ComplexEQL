@@ -63,7 +63,7 @@ class CEQLModelTrainingConfig:
 
     ablation_prune_enabled: bool = True
     ablation_prune_fraction_phase2: float = 0.2
-    ablation_min_edges_total: int = 40
+    ablation_min_edges_total: int = 20
     prune_every_epochs = 5000
 
 

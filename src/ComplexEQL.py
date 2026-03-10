@@ -712,22 +712,20 @@ class ComplexEQL(nn.Module):
             kept = [j for j in range(layer.n_ops) if bool(req[j].item())]
             kept_out_indices_per_layer.append(kept)
 
-        # Drop trailing layers that keep no ops (these would create empty SymbolicLayer -> torch.cat([])).
+        # drop trailing empty layers
         last_nonempty = -1
         for li, kept in enumerate(kept_out_indices_per_layer):
             if len(kept) > 0:
                 last_nonempty = li
 
-        # If everything is empty, keep the first layer as a fallback (do NOT allow 0-layer model here).
-        # This preserves your existing forward/get_symbolic_expression assumptions.
+        # fallback: keep first layer if everything is empty
         if last_nonempty < 0:
             last_nonempty = 0
 
-        # We will rebuild only up to last_nonempty (inclusive).
         kept_out_indices_per_layer = kept_out_indices_per_layer[: last_nonempty + 1]
         old_layers_to_rebuild = list(self.symbolic_layers[: last_nonempty + 1])
 
-        # NEW: ensure no rebuilt layer is empty; otherwise apply_operations() would torch.cat([]).
+        # avoid empty rebuilt layers
         for li, kept in enumerate(kept_out_indices_per_layer):
             if len(kept) == 0:
                 kept_out_indices_per_layer[li] = list(range(old_layers_to_rebuild[li].n_ops))
@@ -757,11 +755,17 @@ class ComplexEQL(nn.Module):
                 keep_cols.append(a_col)
                 keep_cols.append(a_col + 1)
 
-            n_input_fields_new = len(keep_rows)
-            new_layer = SymbolicLayer(cfg, li, n_input_fields=n_input_fields_new, op_specs=op_specs).to(device)
+            new_layer = SymbolicLayer(
+                cfg,
+                li,
+                n_input_fields=len(keep_rows),
+                op_specs=op_specs,
+            ).to(device)
 
             w_new = old_layer.weights.data[keep_rows][:, keep_cols].to(device=device, dtype=dtype)
-            m_new = old_layer.mask.data[keep_rows][:, keep_cols].to(device=device, dtype=old_layer.mask.dtype)
+            m_new = old_layer.mask.data[keep_rows][:, keep_cols].to(
+                device=device, dtype=old_layer.mask.dtype
+            )
 
             new_layer.weights.data.copy_(w_new)
             new_layer.mask.data.copy_(m_new)
@@ -769,27 +773,31 @@ class ComplexEQL(nn.Module):
             new_layers.append(new_layer)
             prev_kept_outputs_old = kept_out
 
-        old_last = old_layers_to_rebuild[-1]
-        last_kept_out = kept_out_indices_per_layer[-1]
-        asm_keep_rows = list(range(n0)) + [n0 + j for j in last_kept_out]
+        # IMPORTANT:
+        # assembly must consume exactly the outputs that the rebuilt final symbolic layer produces
+        old_rows = self.assembly_layer.weights.shape[0]
+
+        # correct assembly dimension required by forward()
+        new_in_dim = n0 + len(prev_kept_outputs_old)
 
         new_model = ComplexEQL.__new__(ComplexEQL)
         nn.Module.__init__(new_model)
         new_model.cfg = cfg
         new_model.symbolic_layers = nn.ModuleList(new_layers)
 
-        new_in_dim = n0 + len(last_kept_out)
         new_model.assembly_layer = AssemblyLayer(cfg, new_in_dim).to(device)
 
-        wA_new = self.assembly_layer.weights.data[asm_keep_rows].to(
-            device=device, dtype=self.assembly_layer.weights.dtype
-        )
-        mA_new = self.assembly_layer.mask.data[asm_keep_rows].to(
-            device=device, dtype=self.assembly_layer.mask.dtype
-        )
+        # build row mapping
+        asm_keep_rows = list(range(n0)) + [n0 + j for j in prev_kept_outputs_old]
 
-        new_model.assembly_layer.weights.data.copy_(wA_new)
-        new_model.assembly_layer.mask.data.copy_(mA_new)
+        # copy safely
+        for new_i, old_i in enumerate(asm_keep_rows):
+            if old_i < old_rows:
+                new_model.assembly_layer.weights.data[new_i] = self.assembly_layer.weights.data[old_i]
+                new_model.assembly_layer.mask.data[new_i] = self.assembly_layer.mask.data[old_i]
+            else:
+                new_model.assembly_layer.weights.data[new_i].zero_()
+                new_model.assembly_layer.mask.data[new_i].zero_()
 
         new_model._angle_hook_handles = []
         new_model._angle_last_inputs = []
