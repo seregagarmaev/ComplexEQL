@@ -76,14 +76,12 @@ class CEQLConfig:
             {"op": "id",    "type": "unary"},
             {"op": "const", "type": "unary"},
             {"op": "square","type": "unary"},
-            {"op": "sqrt",   "type": "unary"},
             {"op": "mul",   "type": "binary"},
         ],
         [
             {"op": "id",    "type": "unary"},
             {"op": "const", "type": "unary"},
             {"op": "square","type": "unary"},
-            {"op": "sqrt",   "type": "unary"},
             {"op": "mul",   "type": "binary"},
         ],
         # [
