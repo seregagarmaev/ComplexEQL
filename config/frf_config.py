@@ -63,13 +63,13 @@ class CEQLModelTrainingConfig:
 
     ablation_prune_enabled: bool = True
     ablation_prune_fraction_phase2: float = 0.2
-    ablation_min_edges_total: int = 20
+    ablation_min_edges_total: int = 50
     prune_every_epochs = 5000
 
 
 class CEQLConfig:
     device = CEQLModelTrainingConfig.device
-    n_resonators = 10
+    n_resonators = 20
 
     no_params_list = [
         [
