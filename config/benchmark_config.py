@@ -231,35 +231,38 @@ class EQLDivConfig:
     base_seed: int = 0
 
     # architecture
-    num_h_layers: int = 2
-    layer_width: int = 5
-    layer_ops: Tuple[str, ...] = ("id", "id", "log", "multiply", "multiply")
-    out_op: str = "id"
+    n_layer: int = 2
+    n_per_base: int = 3
+
+    # Current implementation:
+    # unary ops: 0=id, 1=sin, 2=cos
+    # binary ops: 0=mult
+    basefuncs1: Tuple[int, ...] = (0,)
+    basefuncs2: Tuple[int, ...] = (0,)
 
     # training
-    epoch_factor: int = 1000
-    penalty_every: int = 10
-    batch_size: int = 128
-    penalty_examples_cap: int = 2048
+    n_epochs: int = 10000
+    batch_size: int = 64
+    learning_rate: float = 1e-2
+    gradient: str = "sgd"
 
-    learning_rate: float = 1e-3
-    beta1: float = 0.9
+    # regularization
+    L1_reg: float = 1e-3
+    L2_reg: float = 0.0
+    reg_start: int = 500
+    reg_end: int = 9500
 
-    # sparsity
-    reg_sched: Tuple[float, float] = (0.1, 0.9)
-    reg_scale: float = 1e-2
-    l0_threshold: float = 1e-2
+    # bookkeeping
+    validate_every: int = 100
+    k: int = 50
+    verbose: bool = False
 
-    # division
-    test_div_threshold: float = 1e-2
-    weight_init_param: float = 1.0
-    output_bound: Optional[float] = None
-
-    # symbolic
-    complexity_threshold: float = 1e-3
+    # symbolic extraction
     symbolic_prune_threshold: float = 1e-2
-    round_decimals: int = 6
-    simplify: bool = False
+    simplify: bool = True
+
+    # active units
+    activity_threshold: float = 1e-2
 
 
 CEQL_TRAIN = CEQLModelTrainingConfig()

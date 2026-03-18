@@ -1,156 +1,236 @@
-""" Useful Routines used in EQL. """
+"""
+ Utility functions
+"""
 import csv
-import inspect
-import json
-from ast import literal_eval
-from itertools import accumulate
-from os import path
-
 import numpy as np
-import tensorflow as tf
-
-# The following parameters should not be changed in most cases.
-network_parameters = {'train_val_split': .9,  # how data in train_val_file is split, .9 means 90% train 10% validation
-                      'layer_width': 10,  # number of identical nodes per hidden layer
-                      'batch_size': 20,  # size of data batches used for training
-                      'learning_rate': 5e-4,
-                      'beta1': .4,
-                      'l0_threshold': .05,  # threshold for regularization, see paper: chapter 2.3 Reg Phases
-                      'reg_scale': 1e-5,
-                      'reg_sched': (.25, .95),  # (reg_start, reg_end)
-                      'output_bound': None,  # output boundary for penalty epochs, if set to None it is  calculated
-                      # from training/validation data
-                      'weight_init_param': 1.,
-                      'test_div_threshold': 1e-4,  # threshold for denominator in division layer used when testing
-                      'complexity_threshold': 0.01,  # determines how small a weight has to be to be considered inactive
-                      'penalty_every': 50,  # feed in penalty data for training and evaluate after every n epochs
-                      'penalty_bounds': None,  # domain boundaries for generating penalty data, if None it is calculated
-                      # from extrapolation_data (if provided) or training/validation data
-                      'network_init_seed': None,  # seed for initializing weights in network
-                      }
+from itertools import chain
+import os
+import gzip
+import pickle
 
 
-def update_runtime_params(argv, params):
-    """Routine to update the default parameters with network_parameters and parameters from commandline."""
-    params.update(network_parameters)
-    if len(argv) > 1:
-        try:
-            override = literal_eval(argv[1])
-            if isinstance(override, dict):
-                params.update(override)
-        except Exception:
-            pass
-    params['model_dir'] = path.join(params['model_base_dir'], str(params['id']))
-    return params
+__docformat__ = 'restructedtext en'
 
 
-def get_max_episode(num_h_layers, epoch_factor, penalty_every, **_):
-    """Routine to calculate the total number of training episodes
-    (1 episode = 1 penalty epoch + *penalty_every* normal epochs"""
-    max_episode = (num_h_layers * epoch_factor) // penalty_every
-    if max_episode == 0:
-        raise ValueError('Penalty_every has to be smaller than the total number of epochs.')
-    return max_episode
+def softmax(x):
+    e_x = np.exp(x - np.max(x))
+    out = e_x / e_x.sum()
+    return out
 
 
-def step_to_epochs(global_step, batch_size, train_examples, **_):
-    epoch = tf.math.floordiv(global_step, int(train_examples / batch_size)) + 1
-    return epoch
+def relative_prob(x):
+    e_x = (x - np.min(x))
+    out = e_x / e_x.sum()
+    return out
 
 
-def to_float32(list_of_arrays):
-    return tuple([arr.astype(np.float32) for arr in list_of_arrays])
+def sample_from_dist(pdf, rnd=None):
+    return samples_from_dist(pdf, 1, rnd)[0]
 
 
-def number_of_positional_arguments(fn):
-    params = [value.default for key, value in inspect.signature(fn).parameters.items()]
-    return sum(1 for item in params if item == inspect.Parameter.empty)
-
-
-def get_run_config(kill_summaries):
-    return None
-
-
-def weight_name_for_i(i, weight_type):
-    if i == 0:
-        return 'dense/{}:0'.format(weight_type)
-    return 'dense_{}/{}:0'.format(i, weight_type)
-
-
-def save_results(results, params):
-    """
-    Routine that saves the results as a csv file.
-    :param results: dictionary containing evaluation results
-    :param params: dict of runtime parameters
-    """
-    from os import makedirs
-    results['id'] = params['id']
-    makedirs(params['model_dir'], exist_ok=True)
-    results_file = path.join(params['model_dir'], 'results.csv')
-    with open(path.join(params['model_dir'], 'parameters.json'), 'w') as f:
-        json.dump(params, f, sort_keys=True, indent=4)
-    save_dict_as_csv(results, results_file)
-
-
-def save_dict_as_csv(dict_to_save, file_path):
-    with open(file_path, 'w') as f:
-        writer = csv.DictWriter(f, fieldnames=dict_to_save.keys())
-        writer.writeheader()
-        writer.writerow(dict_to_save)
-
-
-def yield_with_repeats(iterable, repeats):
-    """ Yield the ith item in iterable repeats[i] times. """
-    it = iter(iterable)
-    for num in repeats:
-        new_val = next(it)
-        for i in range(num):
-            yield new_val
-
-
-def yield_equal_chunks(l, n):
-    """Yield successive n-sized chunks from l."""
-    for i in range(0, len(l), n):
-        yield l[i:i + n]
-
-
-def iter_by_chunks(lst, chunk_lens):
-    """ Split list into groups of given size and return an iterator of the groups.
-    Example iter_by_chunks([1, 2, 3, 4], [1, 0, 0, 2, 1]) = ([1], [], [], [2, 3], [4]).
-    :param lst: a list
-    :param chunk_lens: a list specifying lengths of individual chunks
-    :return: a generator object yielding one chunk at a time
-    """
-    splits = [0] + list(accumulate(chunk_lens))
-    for beg, end in zip(splits[:-1], splits[1:]):
-        yield lst[beg:end]
-
-
-def generate_arguments(all_args, repeats, arg_nums):
-    """
-    Split all args into chunks for functions. Example:
-    generate_arguments([0,1,2,3,4,5,6,7,8,9,10], [1, 3, 1], [2, 2, 3]) -> [(0,1), (2,5), (3,6), (4,7), (8,9,10)]
-    :param all_args: list of all arguments
-    :param repeats: list of number of repeats for each function group
-    :param arg_nums: list of number of inputs for each function group
-    :return a generator object yielding one chunk at a time
-    """
-    lengths = (a * b for a, b in zip(repeats, arg_nums))
-    all_chunks = iter_by_chunks(all_args, lengths)
-    for big_chunk, repeat in zip(all_chunks, repeats):
-        yield from zip(*yield_equal_chunks(big_chunk, repeat))
-
-
-def get_div_thresh_fn(is_training, batch_size, test_div_threshold, train_examples, **_):
-    """
-    Returns function to calculate the division threshold from a given step.
-    :param is_training: Boolean to decide if training threshold or test threshold is used.
-    """
-    if is_training:
-        def get_div_thresh(step):
-            epoch = step_to_epochs(global_step=step, batch_size=batch_size, train_examples=train_examples)
-            return 1. / tf.sqrt(tf.cast(epoch, dtype=tf.float32))
+def samples_from_dist(pdf, n=1, rnd=None):
+    if rnd is None:
+        return np.random.choice(len(pdf), n, p=pdf)
     else:
-        def get_div_thresh(step):
-            return test_div_threshold
-    return get_div_thresh
+        return rnd.choice(len(pdf), n, p=pdf)
+
+
+def samples_distinct_from_dist(pdf, n=1, rnd=None):
+    samples = list(set(samples_from_dist(pdf, 3 * n, rnd)))
+    if len(samples) < n:
+        samples = list(set(samples_from_dist(pdf, 50 * n, rnd)))
+    if len(samples) < n:
+        return samples
+    else:
+        return samples[:n]
+
+
+def is_sequence(obj):
+    return hasattr(obj, '__len__') and hasattr(obj, '__getitem__')
+
+
+def flatten(l):
+    return list(chain.from_iterable(l))
+
+
+def normalize(vec):
+    n = np.linalg.norm(vec)
+    if n > 0:
+        return vec / n
+    else:
+        return vec
+
+
+def add_diagonal_limit(mat, val, max_size):
+    di = np.diag_indices(min(min(mat.shape), max_size), mat.ndim)
+    mat[di] += val
+
+
+def wrap_mat_to_vec_func_3(func, *args):
+    return lambda p1, p2, p3: func(
+        np.expand_dims(p1, axis=0),
+        np.expand_dims(p2, axis=0),
+        np.expand_dims(p3, axis=0),
+        *args,
+    )
+
+
+def wrap_mat_to_vec_func_3_0(func, *args):
+    return lambda p1, p2, p3: func(
+        np.expand_dims(p1, axis=0),
+        np.expand_dims(p2, axis=0),
+        np.expand_dims(p3, axis=0),
+        *args,
+    )[0]
+
+
+def wrap_mat_to_vec_func_2(func, *args):
+    return lambda p1, p2: func(
+        np.expand_dims(p1, axis=0),
+        np.expand_dims(p2, axis=0),
+        *args,
+    )
+
+
+def wrap_mat_to_vec_func_2_0(func, *args):
+    return lambda p1, p2: func(
+        np.expand_dims(p1, axis=0),
+        np.expand_dims(p2, axis=0),
+        *args,
+    )[0]
+
+
+def cast_dataset_to_floatX(data_xy):
+    data_x, data_y = data_xy
+    return np.asarray(data_x, dtype=np.float32), np.asarray(data_y, dtype=np.float32)
+
+
+def cast_to_floatX(array):
+    return np.asarray(array, dtype=np.float32)
+
+
+def load_from_hold(name):
+    assert name is not None
+    if os.path.exists(name):
+        with open(name, 'rb') as f:
+            data = pickle.load(f, encoding='latin1')
+            print("loaded data from the file " + name)
+    else:
+        print("Initialising with an empty list")
+        data = []
+    return data
+
+
+def dump_for_hold(data, name):
+    print("Dumping:", name)
+    assert (name is not None) and (data is not None)
+    with open(name, 'wb') as f:
+        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def load_data(dataset):
+    """
+    Loads the dataset
+
+    :type dataset: string
+    :param dataset: the path to the dataset
+    """
+    data_dir, data_file = os.path.split(dataset)
+    if data_dir == "" and not os.path.isfile(dataset):
+        new_path = os.path.join(
+            os.path.split(__file__)[0],
+            "..",
+            "data",
+            dataset
+        )
+        if os.path.isfile(new_path):
+            dataset = new_path
+
+    if not os.path.isfile(dataset):
+        print('cannot find dataset', dataset)
+        return
+
+    print('... loading data ' + dataset)
+
+    f = gzip.open(dataset, 'rb')
+    datasets = pickle.load(f, encoding='latin1')
+    f.close()
+
+    return datasets
+
+
+def splitDataSet(inputs, outputs):
+    assert len(inputs) == len(outputs)
+    size = len(inputs)
+    ts = size * 80 // 100
+    vs = size * 10 // 100
+    train_set = (inputs[:ts], outputs[:ts])
+    valid_set = (inputs[ts:ts + vs], outputs[ts:ts + vs])
+    test_set = (inputs[ts + vs:], outputs[ts + vs:])
+    return train_set, valid_set, test_set
+
+
+def splitDataSetShuffle(inputs, outputs, percent_val_test=10):
+    assert len(inputs) == len(outputs)
+    size = len(inputs)
+    shuffle = np.random.permutation(size)
+    inps = np.asarray(inputs)[shuffle]
+    outs = np.asarray(outputs)[shuffle]
+    ts = size * (100 - 2 * percent_val_test) // 100
+    vs = size * percent_val_test // 100
+    train_set = (inps[:ts], outs[:ts])
+    valid_set = (inps[ts:ts + vs], outs[ts:ts + vs])
+    test_set = (inps[ts + vs:], outs[ts + vs:])
+    return train_set, valid_set, test_set
+
+
+def splitDataSetNoTest(inputs, outputs):
+    assert len(inputs) == len(outputs)
+    size = len(inputs)
+    ts = size * 90 // 100
+    train_set = (inputs[:ts], outputs[:ts])
+    valid_set = (inputs[ts:], outputs[ts:])
+    return train_set, valid_set
+
+
+def addTestSet(train_val, test_set):
+    return train_val[0], train_val[1], test_set
+
+
+def cutDataSet(inputs, outputs, cut):
+    sel = np.linalg.norm(inputs, ord=np.inf, axis=1) <= cut
+    return (inputs[sel], outputs[sel]), (inputs[np.logical_not(sel)], outputs[np.logical_not(sel)])
+
+
+def splitTrainValSets(inputs, outputs, cut):
+    data_full = splitDataSetNoTest(inputs, outputs)
+    (train_all, val_all) = data_full
+    dat_sel = cutDataSet(train_all[0], train_all[1], cut)
+    return data_full, dat_sel
+
+
+def addNoise(data, size):
+    noise = np.random.normal(0, size, data.shape)
+    return data + noise
+
+
+def loadState(filename):
+    with open(filename, "rb") as f:
+        return pickle.load(f, encoding='latin1')
+
+
+def readCSVTable(filename, dtype='|S40'):
+    data = []
+    comments = []
+    with open(filename, 'r', newline='') as csvfile:
+        reader = csv.reader(csvfile, delimiter='\t')
+        for row in reader:
+            if row[0][0] != '#':
+                data.append(row)
+            else:
+                comments.append(row)
+    return np.asarray(data, dtype=dtype), comments
+
+
+def getIdx(header, colname):
+    return np.where(np.asarray(header) == colname)[0].item()
