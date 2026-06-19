@@ -34,13 +34,13 @@ class CEQLModelTrainingConfig:
     loss_function = "MSELoss"
     train_batch_size = 2**14
 
-    lr = 1e-3
+    lr = 1e-2
     scheduler = "ReduceLROnPlateau"
     schedulerparams = dict(mode="min", patience=2000, factor=0.1, min_lr=1e-5)
 
     phase1_epochs = 100000
     phase2_epochs = 250000
-    phase3_epochs = 50000
+    phase3_epochs = 100000
     print_every = 1000
 
     l1_reg_coeff_phase1 = 1e-10
@@ -63,8 +63,8 @@ class CEQLModelTrainingConfig:
     normalize_divisions_eps = 1e-12
 
     imag_w_coeff_phase1 = 1e-10
-    imag_w_coeff_phase2 = 1e-5
-    imag_w_coeff_phase3 = 1e-2
+    imag_w_coeff_phase2 = 1e-3
+    imag_w_coeff_phase3 = 1e-3
 
     phase1_imag_shrink_enabled = False
     phase2_imag_shrink_enabled = False
